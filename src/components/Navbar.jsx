@@ -2,9 +2,12 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Menu, X } from "lucide-react";
 import { Link, NavLink } from "react-router-dom";
 
+import { commonContent } from "../data/commonContent";
 import { navigationItems } from "../data/navigation";
+import useLanguage from "../hooks/useLanguage";
 import { cn } from "../utils/cn";
 import BrandLogo from "./brand/BrandLogo";
+import LanguageToggle from "./LanguageToggle";
 import { Button, Container } from "./ui";
 
 function navigationLinkClass({ isActive }) {
@@ -16,7 +19,7 @@ function navigationLinkClass({ isActive }) {
   );
 }
 
-function NavigationItem({ item, onClick }) {
+function NavigationItem({ item, label, onClick }) {
   if (item.to.includes("#")) {
     return (
       <Link
@@ -24,7 +27,7 @@ function NavigationItem({ item, onClick }) {
         onClick={onClick}
         to={item.to}
       >
-        {item.label}
+        {label}
       </Link>
     );
   }
@@ -36,7 +39,7 @@ function NavigationItem({ item, onClick }) {
       onClick={onClick}
       to={item.to}
     >
-      {item.label}
+      {label}
     </NavLink>
   );
 }
@@ -45,6 +48,8 @@ export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
   const menuId = useId();
   const menuButtonRef = useRef(null);
+  const { language } = useLanguage();
+  const content = commonContent[language].navigation;
 
   const closeMenu = () => setIsOpen(false);
 
@@ -70,28 +75,32 @@ export default function Navbar() {
       <Container>
         <nav
           className="flex min-h-16 items-center justify-between gap-4"
-          aria-label="Primary navigation"
+          aria-label={content.primaryLabel}
         >
-          <Link
-            className="inline-flex items-center gap-2.5 font-semibold tracking-tight text-foreground"
-            onClick={closeMenu}
-            to="/"
-          >
-            <BrandLogo />
-          </Link>
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <LanguageToggle />
+            <Link
+              className="inline-flex min-w-0 items-center gap-2.5 font-semibold tracking-tight text-foreground"
+              onClick={closeMenu}
+              to="/"
+            >
+              <BrandLogo className="[&>span:last-child]:hidden sm:[&>span:last-child]:block" />
+            </Link>
+          </div>
 
           <div className="hidden items-center gap-1 md:flex">
             {navigationItems.map((item) => (
               <NavigationItem
                 item={item}
                 key={item.to}
+                label={content[item.labelKey]}
               />
             ))}
           </div>
 
           <div className="hidden md:block">
             <Button as={Link} size="sm" to="/#app">
-              Download App
+              {content.downloadApp}
             </Button>
           </div>
 
@@ -101,7 +110,7 @@ export default function Navbar() {
             type="button"
             aria-controls={menuId}
             aria-expanded={isOpen}
-            aria-label={isOpen ? "Close navigation menu" : "Open navigation menu"}
+            aria-label={isOpen ? content.closeMenu : content.openMenu}
             onClick={() => setIsOpen((open) => !open)}
           >
             {isOpen ? (
@@ -122,6 +131,7 @@ export default function Navbar() {
                 <NavigationItem
                   item={item}
                   key={item.to}
+                  label={content[item.labelKey]}
                   onClick={closeMenu}
                 />
               ))}
@@ -131,7 +141,7 @@ export default function Navbar() {
                 onClick={closeMenu}
                 to="/#app"
               >
-                Download App
+                {content.downloadApp}
               </Button>
             </div>
           </div>

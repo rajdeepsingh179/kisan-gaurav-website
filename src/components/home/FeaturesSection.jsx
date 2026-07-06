@@ -9,6 +9,7 @@ import {
 
 import { homePageContent } from "../../data/homePage";
 import { motion, typography } from "../../design-system";
+import useLanguage from "../../hooks/useLanguage";
 import { cn } from "../../utils/cn";
 import Reveal from "../motion/Reveal";
 import { Card, Section, SectionHeading } from "../ui";
@@ -23,18 +24,21 @@ const featureIcons = {
 };
 
 export default function FeaturesSection() {
+  const { language } = useLanguage();
+  const content = homePageContent[language].features;
+
   return (
     <Section className="scroll-mt-20" id="features" tone="muted">
       <Reveal>
         <SectionHeading
-          eyebrow="Everyday farmer tools"
-          title="From the crop to the mandi, useful information stays close"
-          description="Kisan Gaurav organises essential farming information around the decisions Indian farmers make through the season."
+          eyebrow={content.eyebrow}
+          title={content.title}
+          description={content.description}
         />
       </Reveal>
 
       <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {homePageContent.features.map((feature, index) => {
+        {content.items.map((feature, index) => {
           const Icon = featureIcons[feature.icon];
 
           return (

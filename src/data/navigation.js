@@ -1,6 +1,6 @@
 export const navigationItems = [
-  { label: "Home", to: "/" },
-  { label: "About", to: "/#about" },
-  { label: "Features", to: "/#features" },
-  { label: "Contact", to: "/#app" },
+  { labelKey: "home", to: "/" },
+  { labelKey: "about", to: "/#about" },
+  { labelKey: "features", to: "/#features" },
+  { labelKey: "contact", to: "/#app" },
 ];

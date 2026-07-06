@@ -5,9 +5,11 @@ import HeroSection from "../components/home/HeroSection";
 import StatisticsSection from "../components/home/StatisticsSection";
 import WhySection from "../components/home/WhySection";
 import useDocumentTitle from "../hooks/useDocumentTitle";
+import useLanguage from "../hooks/useLanguage";
 
 export default function HomePage() {
-  useDocumentTitle("Home");
+  const { language } = useLanguage();
+  useDocumentTitle(language === "hi" ? "मुखपृष्ठ" : "Home");
 
   return (
     <>

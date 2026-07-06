@@ -1,10 +1,15 @@
 import { ArrowRight, Smartphone } from "lucide-react";
+import { homePageContent } from "../../data/homePage";
 import { typography } from "../../design-system";
+import useLanguage from "../../hooks/useLanguage";
 import { cn } from "../../utils/cn";
 import Reveal from "../motion/Reveal";
 import { Button, Section } from "../ui";
 
 export default function CtaSection() {
+  const { language } = useLanguage();
+  const content = homePageContent[language].cta;
+
   return (
     <Section className="scroll-mt-20" id="app" tone="muted">
       <Reveal>
@@ -18,11 +23,10 @@ export default function CtaSection() {
               <Smartphone aria-hidden="true" className="size-6" />
             </span>
             <h2 className={cn(typography.heading1, "mt-7")}>
-              Take Kisan Gaurav into the field.
+              {content.title}
             </h2>
             <p className="mt-5 max-w-2xl text-base leading-7 text-primary-100 sm:text-lg">
-              Check crop guidance before fieldwork, follow mandi context before
-              selling, and keep useful farming information within reach.
+              {content.description}
             </p>
             <Button
               as="a"
@@ -30,7 +34,7 @@ export default function CtaSection() {
               href="#features"
               size="lg"
             >
-              Explore farmer tools
+              {content.action}
               <ArrowRight aria-hidden="true" className="size-4" />
             </Button>
           </div>

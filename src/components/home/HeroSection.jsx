@@ -4,11 +4,13 @@ import { Link } from "react-router-dom";
 
 import { homePageContent } from "../../data/homePage";
 import { motion, typography } from "../../design-system";
+import useLanguage from "../../hooks/useLanguage";
 import { cn } from "../../utils/cn";
 import { Badge, Button, Container } from "../ui";
 
 export default function HeroSection() {
-  const { hero } = homePageContent;
+  const { language } = useLanguage();
+  const { hero } = homePageContent[language];
 
   return (
     <section className="relative isolate overflow-hidden bg-canvas">
@@ -45,25 +47,23 @@ export default function HeroSection() {
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <Button as="a" href="#features" size="lg">
-                Explore features
+                {hero.primaryAction}
                 <ArrowRight aria-hidden="true" className="size-4" />
               </Button>
-              <Button as={Link} size="lg" to="/about" variant="secondary">
-                Our purpose
+              <Button as={Link} size="lg" to="/#about" variant="secondary">
+                {hero.secondaryAction}
               </Button>
             </div>
             <div className="mt-8 flex flex-wrap gap-x-6 gap-y-3 text-sm text-foreground-muted">
-              {["Farmer-first", "Mobile-ready", "Built for clarity"].map(
-                (item) => (
-                  <span className="inline-flex items-center gap-2" key={item}>
-                    <CheckCircle2
-                      aria-hidden="true"
-                      className="size-4 text-primary-700"
-                    />
-                    {item}
-                  </span>
-                ),
-              )}
+              {hero.highlights.map((item) => (
+                <span className="inline-flex items-center gap-2" key={item}>
+                  <CheckCircle2
+                    aria-hidden="true"
+                    className="size-4 text-primary-700"
+                  />
+                  {item}
+                </span>
+              ))}
             </div>
           </m.div>
 
@@ -83,10 +83,10 @@ export default function HeroSection() {
               <div className="flex items-center justify-between text-on-primary">
                 <span className="inline-flex items-center gap-2 text-sm font-semibold">
                   <Sprout className="size-5 text-primary-300" />
-                  Farm overview
+                  {hero.visual.overview}
                 </span>
                 <span className="rounded-full bg-on-primary/10 px-3 py-1 text-xs text-primary-100">
-                  Today
+                  {hero.visual.today}
                 </span>
               </div>
 
@@ -94,10 +94,10 @@ export default function HeroSection() {
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary-700">
-                      Crop health
+                      {hero.visual.cropHealth}
                     </p>
                     <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
-                      Healthy signs
+                      {hero.visual.healthStatus}
                     </p>
                   </div>
                   <span className="grid size-11 place-items-center rounded-full bg-secondary-100 text-secondary-800">
@@ -108,19 +108,27 @@ export default function HeroSection() {
                   <div className="h-full w-[82%] rounded-full bg-primary-600" />
                 </div>
                 <div className="mt-3 flex justify-between text-xs text-foreground-muted">
-                  <span>Field readiness</span>
+                  <span>{hero.visual.readiness}</span>
                   <span>82%</span>
                 </div>
               </div>
 
               <div className="mt-4 grid grid-cols-2 gap-4">
                 <div className="rounded-card border border-on-primary/10 bg-on-primary/10 p-4 text-on-primary">
-                  <p className="text-xs text-primary-200">Next action</p>
-                  <p className="mt-2 text-sm font-semibold">Review irrigation</p>
+                  <p className="text-xs text-primary-200">
+                    {hero.visual.nextAction}
+                  </p>
+                  <p className="mt-2 text-sm font-semibold">
+                    {hero.visual.irrigation}
+                  </p>
                 </div>
                 <div className="rounded-card border border-on-primary/10 bg-on-primary/10 p-4 text-on-primary">
-                  <p className="text-xs text-primary-200">Mandi watch</p>
-                  <p className="mt-2 text-sm font-semibold">Review local prices</p>
+                  <p className="text-xs text-primary-200">
+                    {hero.visual.mandiWatch}
+                  </p>
+                  <p className="mt-2 text-sm font-semibold">
+                    {hero.visual.mandiAction}
+                  </p>
                 </div>
               </div>
             </div>
