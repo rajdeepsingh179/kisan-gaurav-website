@@ -3,6 +3,8 @@ import { cn } from "../../utils/cn";
 const variantClasses = {
   primary:
     "bg-primary-700 text-on-primary shadow-soft hover:bg-primary-800 active:bg-primary-900",
+  outline:
+    "border border-primary-600 bg-transparent text-primary-800 hover:bg-primary-50 active:bg-primary-100",
   secondary:
     "border border-border bg-surface text-foreground shadow-soft hover:border-primary-200 hover:bg-primary-50",
   ghost: "text-foreground hover:bg-surface-muted",

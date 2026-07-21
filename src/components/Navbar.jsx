@@ -8,6 +8,7 @@ import useLanguage from "../hooks/useLanguage";
 import { cn } from "../utils/cn";
 import BrandLogo from "./brand/BrandLogo";
 import LanguageToggle from "./LanguageToggle";
+import { SignInModal, SignUpModal } from "./auth";
 import { Button, Container } from "./ui";
 
 function navigationLinkClass({ isActive }) {
@@ -46,12 +47,17 @@ function NavigationItem({ item, label, onClick }) {
 
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
+  const [authModal, setAuthModal] = useState(null);
   const menuId = useId();
   const menuButtonRef = useRef(null);
   const { language } = useLanguage();
   const content = commonContent[language].navigation;
 
   const closeMenu = () => setIsOpen(false);
+  const openAuthModal = (modal) => {
+    closeMenu();
+    setAuthModal(modal);
+  };
 
   useEffect(() => {
     if (!isOpen) {
@@ -88,7 +94,7 @@ export default function Navbar() {
             </Link>
           </div>
 
-          <div className="hidden items-center gap-1 md:flex">
+          <div className="hidden items-center gap-1 lg:flex">
             {navigationItems.map((item) => (
               <NavigationItem
                 item={item}
@@ -98,15 +104,21 @@ export default function Navbar() {
             ))}
           </div>
 
-          <div className="hidden md:block">
-            <Button as={Link} size="sm" to="/#app">
+          <div className="hidden items-center gap-2 lg:flex">
+            <Button size="sm" variant="outline" onClick={() => openAuthModal("signIn")}>
+              Sign In
+            </Button>
+            <Button size="sm" onClick={() => openAuthModal("signUp")}>
+              Sign Up
+            </Button>
+            <Button as={Link} size="sm" variant="secondary" to="/#app">
               {content.downloadApp}
             </Button>
           </div>
 
           <button
             ref={menuButtonRef}
-            className="grid size-11 place-items-center rounded-control text-foreground transition-colors hover:bg-surface-muted md:hidden"
+            className="grid size-11 place-items-center rounded-control text-foreground transition-colors hover:bg-surface-muted lg:hidden"
             type="button"
             aria-controls={menuId}
             aria-expanded={isOpen}
@@ -123,7 +135,7 @@ export default function Navbar() {
 
         {isOpen ? (
           <div
-            className="border-t border-border py-3 md:hidden"
+            className="border-t border-border py-3 lg:hidden"
             id={menuId}
           >
             <div className="flex flex-col gap-1">
@@ -135,18 +147,29 @@ export default function Navbar() {
                   onClick={closeMenu}
                 />
               ))}
-              <Button
-                as={Link}
-                className="mt-2 w-full"
-                onClick={closeMenu}
-                to="/#app"
-              >
-                {content.downloadApp}
-              </Button>
+              <div className="mt-2 grid gap-2 border-t border-border pt-3 sm:grid-cols-3">
+                <Button variant="outline" onClick={() => openAuthModal("signIn")}>
+                  Sign In
+                </Button>
+                <Button onClick={() => openAuthModal("signUp")}>Sign Up</Button>
+                <Button as={Link} variant="secondary" onClick={closeMenu} to="/#app">
+                  {content.downloadApp}
+                </Button>
+              </div>
             </div>
           </div>
         ) : null}
       </Container>
+      <SignInModal
+        isOpen={authModal === "signIn"}
+        onClose={() => setAuthModal(null)}
+        onSwitchToSignUp={() => setAuthModal("signUp")}
+      />
+      <SignUpModal
+        isOpen={authModal === "signUp"}
+        onClose={() => setAuthModal(null)}
+        onSwitchToSignIn={() => setAuthModal("signIn")}
+      />
     </header>
   );
 }
