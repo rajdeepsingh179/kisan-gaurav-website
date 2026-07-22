@@ -2,6 +2,10 @@ export const commonContent = {
   en: {
     navigation: {
       home: "Home",
+      shop: "Shop",
+      categories: "Categories",
+      kisanDigital: "Kisan Digital",
+      cart: "Cart",
       about: "About",
       features: "Features",
       products: "Products",
@@ -40,6 +44,10 @@ export const commonContent = {
   hi: {
     navigation: {
       home: "मुखपृष्ठ",
+      shop: "दुकान",
+      categories: "श्रेणियाँ",
+      kisanDigital: "किसान डिजिटल",
+      cart: "कार्ट",
       about: "हमारे बारे में",
       features: "सुविधाएँ",
       products: "ड्राई फ्रूट्स",

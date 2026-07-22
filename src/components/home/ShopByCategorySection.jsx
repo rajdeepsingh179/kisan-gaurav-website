@@ -12,7 +12,7 @@ export default function ShopByCategorySection() {
   const content = homeCommerceContent[language].categories;
 
   return (
-    <Section tone="muted">
+    <Section className="scroll-mt-24" id="categories" tone="muted">
       <SectionHeading
         align="center"
         description={content.description}

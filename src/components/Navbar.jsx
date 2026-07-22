@@ -5,6 +5,7 @@ import { Link, NavLink } from "react-router-dom";
 import { commonContent } from "../data/commonContent";
 import { navigationItems } from "../data/navigation";
 import useLanguage from "../hooks/useLanguage";
+import useProducts from "../hooks/useProducts";
 import { cn } from "../utils/cn";
 import BrandLogo from "./brand/BrandLogo";
 import LanguageToggle from "./LanguageToggle";
@@ -51,6 +52,7 @@ export default function Navbar() {
   const menuId = useId();
   const menuButtonRef = useRef(null);
   const { language } = useLanguage();
+  const { cartCount } = useProducts();
   const content = commonContent[language].navigation;
 
   const closeMenu = () => setIsOpen(false);
@@ -108,25 +110,29 @@ export default function Navbar() {
             <Button size="sm" variant="outline" onClick={() => openAuthModal("signIn")}>
               Sign In
             </Button>
-            <Button size="sm" onClick={() => openAuthModal("signUp")}>
-              Sign Up
-            </Button>
-            <Button as={Link} size="sm" variant="secondary" to="/#app">
-              {content.downloadApp}
+            <Button as={Link} className="relative" size="sm" to="/cart" variant="accent">
+              <ShoppingBag aria-hidden="true" className="size-4" />
+              {content.cart}
+              {cartCount ? (
+                <span className="grid min-w-5 place-items-center rounded-full bg-primary-950 px-1 text-[0.65rem] leading-5 text-on-primary" aria-label={`${cartCount} items in cart`}>
+                  {cartCount}
+                </span>
+              ) : null}
             </Button>
           </div>
 
           <Button
             as={Link}
-            aria-label={content.products}
+            aria-label={`${content.cart}${cartCount ? `, ${cartCount} items` : ""}`}
             className="ml-auto size-11 shrink-0 px-0 sm:w-auto sm:px-3.5 xl:hidden"
             size="sm"
-            title={content.products}
-            to="/products"
+            title={content.cart}
+            to="/cart"
             variant="accent"
           >
             <ShoppingBag aria-hidden="true" className="size-4" />
-            <span className="hidden sm:inline">{content.products}</span>
+            <span className="hidden sm:inline">{content.cart}</span>
+            {cartCount ? <span className="grid min-w-5 place-items-center rounded-full bg-primary-950 px-1 text-[0.65rem] leading-5 text-on-primary">{cartCount}</span> : null}
           </Button>
 
           <button
@@ -164,9 +170,9 @@ export default function Navbar() {
                 <Button variant="outline" onClick={() => openAuthModal("signIn")}>
                   Sign In
                 </Button>
-                <Button onClick={() => openAuthModal("signUp")}>Sign Up</Button>
-                <Button as={Link} variant="secondary" onClick={closeMenu} to="/#app">
-                  {content.downloadApp}
+                <Button as={Link} onClick={closeMenu} to="/cart" variant="accent">
+                  <ShoppingBag aria-hidden="true" className="size-4" />
+                  {content.cart}{cartCount ? ` (${cartCount})` : ""}
                 </Button>
               </div>
             </div>

@@ -9,6 +9,8 @@ import loadMotionFeatures from "./utils/loadMotionFeatures";
 const HomePage = lazy(() => import("./pages/HomePage"));
 const ProductsPage = lazy(() => import("./pages/ProductsPage"));
 const ProductDetailPage = lazy(() => import("./pages/ProductDetailPage"));
+const KisanDigitalPage = lazy(() => import("./pages/KisanDigitalPage"));
+const CartPage = lazy(() => import("./pages/CartPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
 export default function App() {
@@ -21,6 +23,8 @@ export default function App() {
               <Route index element={<HomePage />} />
               <Route path="products" element={<ProductsPage />} />
               <Route path="products/:productSlug" element={<ProductDetailPage />} />
+              <Route path="kisan-digital" element={<KisanDigitalPage />} />
+              <Route path="cart" element={<CartPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Routes>

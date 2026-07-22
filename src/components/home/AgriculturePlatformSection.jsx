@@ -8,6 +8,7 @@ import {
   Smartphone,
   Store,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import { homeCommerceContent } from "../../data/homeCommerce";
 import { typography } from "../../design-system";
@@ -67,7 +68,7 @@ export default function AgriculturePlatformSection() {
                   {service.action}
                 </Button>
               ) : (
-                <Button as="a" className="mt-5 w-full border-on-primary/25 text-on-primary hover:bg-on-primary/10" href={service.href} variant="outline">
+                <Button as={Link} className="mt-5 w-full border-on-primary/25 text-on-primary hover:bg-on-primary/10" to="/kisan-digital" variant="outline">
                   {service.action}
                   <ArrowRight aria-hidden="true" className="size-4" />
                 </Button>
