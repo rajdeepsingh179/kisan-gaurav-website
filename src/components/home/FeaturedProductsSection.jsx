@@ -2,15 +2,16 @@ import { ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { homeCommerceContent } from "../../data/homeCommerce";
-import { productsPageContent } from "../../data/productsPage";
 import useLanguage from "../../hooks/useLanguage";
+import useProducts from "../../hooks/useProducts";
 import ProductCard from "../products/ProductCard";
 import { Button, Section, SectionHeading } from "../ui";
 
 export default function FeaturedProductsSection() {
   const { language } = useLanguage();
+  const { products } = useProducts();
   const content = homeCommerceContent[language].featured;
-  const products = productsPageContent[language].products;
+  const featuredProducts = products.slice(0, 4);
 
   return (
     <Section className="scroll-mt-24" id="featured-products">
@@ -27,13 +28,8 @@ export default function FeaturedProductsSection() {
       </div>
 
       <div className="mt-10 grid min-w-0 grid-cols-1 gap-6 md:mt-14 md:grid-cols-2 lg:grid-cols-4">
-        {products.map((product) => (
-          <ProductCard
-            actionHref="/products"
-            key={product.name}
-            product={product}
-            statusLabel={content.cardAction}
-          />
+        {featuredProducts.map((product) => (
+          <ProductCard key={product.id} product={product} />
         ))}
       </div>
     </Section>

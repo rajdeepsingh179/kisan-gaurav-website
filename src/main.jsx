@@ -4,14 +4,17 @@ import { BrowserRouter } from "react-router-dom";
 
 import App from "./App";
 import LanguageProvider from "./contexts/LanguageProvider";
+import ProductProvider from "./contexts/ProductProvider";
 import "./index.css";
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
     <LanguageProvider>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
+      <ProductProvider>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </ProductProvider>
     </LanguageProvider>
   </StrictMode>,
 );
