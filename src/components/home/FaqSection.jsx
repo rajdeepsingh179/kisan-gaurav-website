@@ -1,10 +1,9 @@
 import { ChevronDown } from "lucide-react";
 
 import { homePageContent } from "../../data/homePage";
-import { motion, typography } from "../../design-system";
+import { typography } from "../../design-system";
 import useLanguage from "../../hooks/useLanguage";
 import { cn } from "../../utils/cn";
-import Reveal from "../motion/Reveal";
 import { Section, SectionHeading } from "../ui";
 
 export default function FaqSection() {
@@ -14,17 +13,17 @@ export default function FaqSection() {
   return (
     <Section>
       <div className="grid gap-10 lg:grid-cols-[0.75fr_1.25fr] lg:gap-20">
-        <Reveal>
+        <div>
           <SectionHeading
             eyebrow={content.eyebrow}
             title={content.title}
             description={content.description}
           />
-        </Reveal>
+        </div>
 
         <div className="divide-y divide-border overflow-hidden rounded-card border border-border bg-surface px-5 shadow-card sm:px-7">
-          {content.items.map((item, index) => (
-            <Reveal delay={index * motion.stagger} key={item.question}>
+          {content.items.map((item) => (
+            <div key={item.question}>
               <details className="group">
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-6 py-6 font-semibold tracking-[-0.01em] text-foreground transition-colors marker:content-none hover:text-primary-700">
                   {item.question}
@@ -42,7 +41,7 @@ export default function FaqSection() {
                   {item.answer}
                 </p>
               </details>
-            </Reveal>
+            </div>
           ))}
         </div>
       </div>

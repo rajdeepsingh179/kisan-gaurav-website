@@ -116,12 +116,12 @@ export const homePageContent = {
         {
           question: "What is Kisan Gaurav?",
           answer:
-            "Kisan Gaurav brings crop guidance, mandi information, weather context, government schemes, and farmer knowledge together in a mobile-first service for Indian agriculture.",
+            "Kisan Gaurav is a premium healthy food brand for Makhana, dry fruits, snacks, and gift packs, as well as a mobile-first digital agriculture platform for Indian farmers.",
         },
         {
           question: "Who is Kisan Gaurav designed for?",
           answer:
-            "It is designed first for Indian farmers and the practical decisions they make in the field, at the mandi, and throughout the crop season.",
+            "Its premium foods are made for families, workplaces, celebrations, and gifting, while its digital services support Indian farmers through field, mandi, and seasonal decisions.",
         },
         {
           question: "Will Kisan Gaurav work on a mobile phone?",
@@ -131,7 +131,7 @@ export const homePageContent = {
         {
           question: "What can farmers use it for?",
           answer:
-            "Farmers can review crop concerns, mandi information, local weather, government schemes, and practical discussions with other farmers.",
+            "Farmers can review crop concerns, mandi information, local weather, government schemes, ICAR recommendations, and practical advisory information.",
         },
         {
           question: "How can I get the Kisan Gaurav app?",
@@ -258,12 +258,12 @@ export const homePageContent = {
         {
           question: "किसान गौरव क्या है?",
           answer:
-            "किसान गौरव फसल मार्गदर्शन, मंडी जानकारी, मौसम, सरकारी योजनाएँ और किसानों का अनुभव भारतीय कृषि के लिए एक मोबाइल-प्रथम सेवा में लाता है।",
+            "किसान गौरव मखाना, ड्राई फ्रूट्स, हेल्दी स्नैक्स और गिफ्ट पैक का प्रीमियम खाद्य ब्रांड है, साथ ही भारतीय किसानों के लिए मोबाइल-प्रथम डिजिटल कृषि प्लेटफ़ॉर्म भी है।",
         },
         {
           question: "किसान गौरव किसके लिए बनाया गया है?",
           answer:
-            "यह भारतीय किसानों और खेत, मंडी तथा पूरे फसल मौसम में लिए जाने वाले उनके व्यावहारिक निर्णयों के लिए बनाया गया है।",
+            "इसके प्रीमियम खाद्य परिवारों, कार्यस्थलों, उत्सवों और उपहारों के लिए हैं, जबकि डिजिटल सेवाएँ भारतीय किसानों के खेत, मंडी और मौसमी निर्णयों में सहायता करती हैं।",
         },
         {
           question: "क्या किसान गौरव मोबाइल पर चलेगा?",
@@ -273,7 +273,7 @@ export const homePageContent = {
         {
           question: "किसान इसका उपयोग किस लिए कर सकते हैं?",
           answer:
-            "किसान फसल की समस्या, मंडी जानकारी, स्थानीय मौसम, सरकारी योजनाएँ और दूसरे किसानों की व्यावहारिक चर्चा देख सकते हैं।",
+            "किसान फसल की समस्या, मंडी जानकारी, स्थानीय मौसम, सरकारी योजनाएँ, आईसीएआर सुझाव और व्यावहारिक किसान सलाह देख सकते हैं।",
         },
         {
           question: "किसान गौरव ऐप कैसे मिलेगा?",

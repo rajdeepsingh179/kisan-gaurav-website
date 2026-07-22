@@ -1,10 +1,11 @@
-import { Leaf } from "lucide-react";
+import { ArrowRight, Leaf } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import { Card } from "../ui";
 import { typography } from "../../design-system";
 import { cn } from "../../utils/cn";
 
-export default function ProductCard({ product, statusLabel }) {
+export default function ProductCard({ actionHref, product, statusLabel }) {
   return (
     <Card
       as="article"
@@ -20,7 +21,7 @@ export default function ProductCard({ product, statusLabel }) {
           loading="lazy"
           sizes="(min-width: 1024px) 25vw, (min-width: 768px) 50vw, 100vw"
           src={product.image.large}
-          srcSet={`${product.image.small} 480w, ${product.image.large} 900w`}
+          srcSet={`${product.image.small} ${product.image.smallWidth}w, ${product.image.large} ${product.image.largeWidth}w`}
           width="900"
         />
       </div>
@@ -42,9 +43,19 @@ export default function ProductCard({ product, statusLabel }) {
         <p className={cn(typography.bodySmall, "mt-2.5 flex-1 text-foreground-muted")}>
           {product.description}
         </p>
-        <p className="mt-5 border-t border-border pt-4 text-sm font-semibold text-primary-700">
-          {statusLabel}
-        </p>
+        {actionHref ? (
+          <Link
+            className="mt-5 inline-flex min-h-11 items-center justify-between gap-3 border-t border-border pt-4 text-sm font-semibold text-primary-700 transition hover:text-primary-800"
+            to={actionHref}
+          >
+            {statusLabel}
+            <ArrowRight aria-hidden="true" className="size-4" />
+          </Link>
+        ) : (
+          <p className="mt-5 border-t border-border pt-4 text-sm font-semibold text-primary-700">
+            {statusLabel}
+          </p>
+        )}
       </div>
     </Card>
   );

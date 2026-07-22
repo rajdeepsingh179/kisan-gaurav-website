@@ -17,7 +17,7 @@ export default function Footer() {
   ];
 
   return (
-    <footer className="border-t border-border bg-[linear-gradient(180deg,var(--kg-color-surface),var(--kg-color-surface-muted))]">
+    <footer className="scroll-mt-24 border-t border-border bg-[linear-gradient(180deg,var(--kg-color-surface),var(--kg-color-surface-muted))]" id="contact">
       <Container>
         <div className="flex flex-col gap-6 border-b border-border py-10 sm:flex-row sm:items-center sm:justify-between">
           <BrandLogo showTagline />

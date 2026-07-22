@@ -1,10 +1,12 @@
-import CtaSection from "../components/home/CtaSection";
-import DryFruitPromoBanner from "../components/home/DryFruitPromoBanner";
+import AboutBrandSection from "../components/home/AboutBrandSection";
+import AgriculturePlatformSection from "../components/home/AgriculturePlatformSection";
+import CommerceHeroSection from "../components/home/CommerceHeroSection";
 import FaqSection from "../components/home/FaqSection";
-import FeaturesSection from "../components/home/FeaturesSection";
-import HeroSection from "../components/home/HeroSection";
-import StatisticsSection from "../components/home/StatisticsSection";
-import WhySection from "../components/home/WhySection";
+import FeaturedProductsSection from "../components/home/FeaturedProductsSection";
+import FoodBenefitsSection from "../components/home/FoodBenefitsSection";
+import PackagingSection from "../components/home/PackagingSection";
+import ReviewsSection from "../components/home/ReviewsSection";
+import ShopByCategorySection from "../components/home/ShopByCategorySection";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 import useLanguage from "../hooks/useLanguage";
 
@@ -14,12 +16,14 @@ export default function HomePage() {
 
   return (
     <>
-      <DryFruitPromoBanner isAuthenticated={false} />
-      <HeroSection />
-      <FeaturesSection />
-      <StatisticsSection />
-      <WhySection />
-      <CtaSection />
+      <CommerceHeroSection />
+      <FeaturedProductsSection />
+      <ShopByCategorySection />
+      <FoodBenefitsSection />
+      <PackagingSection />
+      <ReviewsSection />
+      <AgriculturePlatformSection />
+      <AboutBrandSection />
       <FaqSection />
     </>
   );

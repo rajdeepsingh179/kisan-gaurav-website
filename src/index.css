@@ -83,17 +83,17 @@
 
 @layer base {
   :root {
-    --kg-primary-50: #e8f4eb;
-    --kg-primary-100: #cfe8d5;
-    --kg-primary-200: #a6d4b3;
-    --kg-primary-300: #72b989;
-    --kg-primary-400: #449c63;
-    --kg-primary-500: #27834d;
-    --kg-primary-600: #1f7041;
-    --kg-primary-700: #175d36;
-    --kg-primary-800: #134c2d;
-    --kg-primary-900: #103f26;
-    --kg-primary-950: #062416;
+    --kg-primary-50: #edf5f0;
+    --kg-primary-100: #d9eadf;
+    --kg-primary-200: #b5d5c0;
+    --kg-primary-300: #86b79a;
+    --kg-primary-400: #55936f;
+    --kg-primary-500: #347552;
+    --kg-primary-600: #285f43;
+    --kg-primary-700: #1f5e3b;
+    --kg-primary-800: #194b30;
+    --kg-primary-900: #153d28;
+    --kg-primary-950: #0a2417;
 
     --kg-secondary-50: #edf9ef;
     --kg-secondary-100: #d3f0d9;
@@ -119,17 +119,17 @@
     --kg-earth-900: #50352a;
     --kg-earth-950: #2d1b15;
 
-    --kg-accent-50: #fffbeb;
-    --kg-accent-100: #fef3c7;
-    --kg-accent-200: #fde68a;
-    --kg-accent-300: #fcd34d;
-    --kg-accent-400: #fbbf24;
-    --kg-accent-500: #f59e0b;
-    --kg-accent-600: #d97706;
-    --kg-accent-700: #b45309;
-    --kg-accent-800: #92400e;
-    --kg-accent-900: #78350f;
-    --kg-accent-950: #451a03;
+    --kg-accent-50: #fbf8ef;
+    --kg-accent-100: #f5edda;
+    --kg-accent-200: #ead9b4;
+    --kg-accent-300: #dcc081;
+    --kg-accent-400: #cea956;
+    --kg-accent-500: #c59d3d;
+    --kg-accent-600: #a97e2f;
+    --kg-accent-700: #856025;
+    --kg-accent-800: #6f4e24;
+    --kg-accent-900: #5f4222;
+    --kg-accent-950: #362211;
 
     --kg-neutral-50: #f7f9f7;
     --kg-neutral-100: #e8eee9;
@@ -144,9 +144,9 @@
     --kg-neutral-950: #1b1b1b;
 
     --kg-white: #ffffff;
-    --kg-color-canvas: #f2f7ef;
+    --kg-color-canvas: #fcfcf7;
     --kg-color-surface: var(--kg-white);
-    --kg-color-surface-muted: #e7f0e5;
+    --kg-color-surface-muted: #f3f4eb;
     --kg-color-foreground: var(--kg-neutral-950);
     --kg-color-foreground-muted: var(--kg-neutral-600);
     --kg-color-border: var(--kg-neutral-200);

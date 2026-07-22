@@ -1,19 +1,27 @@
-const productImages = {
+export const productImages = {
   almonds: {
     small: "/images/products/almonds-480.jpg",
+    smallWidth: 480,
     large: "/images/products/almonds-900.jpg",
+    largeWidth: 900,
   },
   cashews: {
     small: "/images/products/cashews-480.jpg",
+    smallWidth: 480,
     large: "/images/products/cashews-900.jpg",
+    largeWidth: 900,
   },
   makhana: {
     small: "/images/products/makhana-480.jpg",
+    smallWidth: 480,
     large: "/images/products/makhana-900.jpg",
+    largeWidth: 900,
   },
   premiumMix: {
     small: "/images/products/premium-mix-480.jpg",
+    smallWidth: 480,
     large: "/images/products/premium-mix-900.jpg",
+    largeWidth: 900,
   },
 };
 

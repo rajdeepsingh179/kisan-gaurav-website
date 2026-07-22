@@ -13,7 +13,7 @@ import { Button, Container } from "./ui";
 
 function navigationLinkClass({ isActive }) {
   return cn(
-    "rounded-control px-3.5 py-2 text-sm font-semibold tracking-[-0.01em] transition-all duration-200",
+    "rounded-control px-2.5 py-2 text-sm font-semibold tracking-[-0.01em] transition-all duration-200",
     isActive
       ? "bg-primary-50 text-primary-800 shadow-soft"
       : "text-foreground-muted hover:bg-surface hover:text-primary-800",
@@ -24,7 +24,7 @@ function NavigationItem({ item, label, onClick }) {
   if (item.to.includes("#")) {
     return (
       <Link
-        className="rounded-control px-3.5 py-2 text-sm font-semibold tracking-[-0.01em] text-foreground-muted transition-all duration-200 hover:bg-surface hover:text-primary-800"
+        className="rounded-control px-2.5 py-2 text-sm font-semibold tracking-[-0.01em] text-foreground-muted transition-all duration-200 hover:bg-surface hover:text-primary-800"
         onClick={onClick}
         to={item.to}
       >
@@ -80,7 +80,7 @@ export default function Navbar() {
     <header className="sticky top-0 z-50 border-b border-primary-900/15 bg-canvas/95 shadow-[0_2px_22px_rgb(23_93_54_/_0.12)] backdrop-blur-2xl supports-[backdrop-filter]:bg-canvas/88">
       <Container className="max-w-[84rem]">
         <nav
-          className="flex min-h-18 items-center justify-between gap-5"
+          className="flex min-h-18 items-center justify-between gap-3"
           aria-label={content.primaryLabel}
         >
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -94,7 +94,7 @@ export default function Navbar() {
             </Link>
           </div>
 
-          <div className="hidden items-center gap-1.5 xl:flex">
+          <div className="hidden items-center gap-0.5 xl:flex">
             {navigationItems.map((item) => (
               <NavigationItem
                 item={item}
@@ -104,7 +104,7 @@ export default function Navbar() {
             ))}
           </div>
 
-          <div className="hidden items-center gap-2.5 xl:flex">
+          <div className="hidden items-center gap-2 xl:flex">
             <Button size="sm" variant="outline" onClick={() => openAuthModal("signIn")}>
               Sign In
             </Button>
