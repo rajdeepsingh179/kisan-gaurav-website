@@ -5,7 +5,7 @@ import Container from "./Container";
 
 const toneClasses = {
   default: "bg-canvas",
-  muted: "bg-surface-muted",
+  muted: "bg-[linear-gradient(180deg,var(--kg-color-surface-muted),var(--kg-color-canvas))]",
   primary: "bg-primary-950 text-on-primary",
 };
 

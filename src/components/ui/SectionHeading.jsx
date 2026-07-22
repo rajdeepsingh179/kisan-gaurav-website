@@ -23,11 +23,11 @@ export default function SectionHeading({
           {eyebrow}
         </p>
       ) : null}
-      <h2 className={cn(typography.heading2, "mt-3 text-foreground")}>
+      <h2 className={cn(typography.heading2, "mt-4 text-foreground text-balance")}>
         {title}
       </h2>
       {description ? (
-        <p className={cn(typography.body, "mt-4 text-foreground-muted sm:text-lg")}>
+        <p className={cn(typography.body, "mt-5 text-foreground-muted sm:text-lg")}>
           {description}
         </p>
       ) : null}

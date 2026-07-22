@@ -17,9 +17,9 @@ export default function Footer() {
   ];
 
   return (
-    <footer className="border-t border-border bg-surface-muted">
+    <footer className="border-t border-border bg-[linear-gradient(180deg,var(--kg-color-surface),var(--kg-color-surface-muted))]">
       <Container>
-        <div className="flex flex-col gap-5 border-b border-border py-8 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-6 border-b border-border py-10 sm:flex-row sm:items-center sm:justify-between">
           <BrandLogo showTagline />
           <p className="max-w-md text-sm leading-6 text-foreground-muted sm:text-right">
             {content.description}

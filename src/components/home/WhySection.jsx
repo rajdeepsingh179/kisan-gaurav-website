@@ -13,7 +13,7 @@ export default function WhySection() {
 
   return (
     <Section className="scroll-mt-20" id="about">
-      <div className="grid items-center gap-12 lg:grid-cols-2 lg:gap-20">
+      <div className="grid items-center gap-14 lg:grid-cols-2 lg:gap-24">
         <div>
           <Reveal>
             <SectionHeading
@@ -23,11 +23,11 @@ export default function WhySection() {
             />
           </Reveal>
 
-          <div className="mt-9 space-y-7">
+          <div className="mt-10 space-y-7">
             {content.reasons.map((reason, index) => (
               <Reveal delay={index * motion.stagger} key={reason.title}>
-                <div className="flex gap-4">
-                  <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-primary-100 text-primary-800">
+                <div className="group flex gap-4 rounded-card border border-transparent p-1 transition hover:border-primary-100 hover:bg-primary-50/60">
+                  <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-primary-100 text-primary-800 transition group-hover:bg-primary-700 group-hover:text-on-primary">
                     <Check aria-hidden="true" className="size-4" />
                   </span>
                   <div>
@@ -46,17 +46,17 @@ export default function WhySection() {
 
         <Reveal>
           <Card
-            className="relative overflow-hidden border-earth-200 bg-earth-50"
+            className="relative overflow-hidden border-earth-200/80 bg-[linear-gradient(145deg,var(--kg-earth-50),var(--kg-accent-50))]"
             elevated
             padding="lg"
           >
             <div
-              className="absolute -right-16 -top-16 size-48 rounded-full bg-secondary-200/60 blur-3xl"
+              className="absolute -right-16 -top-16 size-56 rounded-full bg-accent-200/50 blur-3xl"
               aria-hidden="true"
             />
             <Quote
               aria-hidden="true"
-              className="relative size-9 text-earth-700"
+              className="relative size-9 text-accent-600"
               strokeWidth={1.5}
             />
             <blockquote className="relative mt-8 text-2xl font-semibold leading-9 tracking-tight text-foreground sm:text-3xl sm:leading-10">

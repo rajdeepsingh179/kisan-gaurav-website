@@ -9,7 +9,7 @@ export default function LanguageToggle() {
 
   return (
     <button
-      className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-control border border-border bg-surface px-2.5 text-xs font-semibold text-foreground shadow-soft transition-colors hover:border-primary-200 hover:bg-primary-50 sm:px-3"
+      className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-control border border-border/90 bg-surface/80 px-2.5 text-xs font-semibold text-foreground shadow-soft transition-all hover:-translate-y-0.5 hover:border-primary-200 hover:bg-primary-50 sm:px-3"
       type="button"
       aria-label={content.switchLabel}
       onClick={toggleLanguage}

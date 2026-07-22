@@ -13,9 +13,13 @@ export default function CtaSection() {
   return (
     <Section className="scroll-mt-20" id="app" tone="muted">
       <Reveal>
-        <div className="relative overflow-hidden rounded-[2rem] bg-primary-800 px-6 py-12 text-on-primary shadow-lifted sm:px-10 sm:py-16 lg:px-16">
+        <div className="relative overflow-hidden rounded-[2rem] border border-primary-700 bg-[linear-gradient(135deg,var(--kg-primary-900),var(--kg-primary-700))] px-6 py-12 text-on-primary shadow-lifted sm:px-10 sm:py-16 lg:px-16">
           <div
             className="absolute -right-20 -top-32 size-80 rounded-full border-[56px] border-on-primary/5"
+            aria-hidden="true"
+          />
+          <div
+            className="absolute bottom-[-8rem] right-40 size-64 rounded-full bg-accent-400/15 blur-3xl"
             aria-hidden="true"
           />
           <div className="relative max-w-3xl">
@@ -30,9 +34,10 @@ export default function CtaSection() {
             </p>
             <Button
               as="a"
-              className="mt-8 bg-surface text-primary-900 hover:bg-primary-50"
+              className="mt-8"
               href="#features"
               size="lg"
+              variant="accent"
             >
               {content.action}
               <ArrowRight aria-hidden="true" className="size-4" />

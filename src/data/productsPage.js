@@ -1,0 +1,123 @@
+const productImages = {
+  almonds: {
+    small: "/images/products/almonds-480.jpg",
+    large: "/images/products/almonds-900.jpg",
+  },
+  cashews: {
+    small: "/images/products/cashews-480.jpg",
+    large: "/images/products/cashews-900.jpg",
+  },
+  makhana: {
+    small: "/images/products/makhana-480.jpg",
+    large: "/images/products/makhana-900.jpg",
+  },
+  premiumMix: {
+    small: "/images/products/premium-mix-480.jpg",
+    large: "/images/products/premium-mix-900.jpg",
+  },
+};
+
+export const productsPageContent = {
+  en: {
+    promotion: {
+      eyebrow: "New premium range",
+      title: "Discover Makhana and premium dry fruits",
+      description: "Wholesome choices selected with care for everyday nutrition and gifting.",
+      action: "Explore dry fruits",
+    },
+    eyebrow: "Kisan Gaurav products",
+    title: "Premium Dry Fruits & Makhana",
+    description: "Healthy snacks sourced with care from trusted farms.",
+    primaryAction: "Shop Now",
+    collectionEyebrow: "Premium selection",
+    collectionTitle: "Wholesome favourites for every day",
+    collectionDescription:
+      "Explore a carefully selected range made for mindful snacking, family nourishment, and thoughtful gifting.",
+    statusLabel: "Coming soon",
+    products: [
+      {
+        name: "Premium Makhana",
+        description: "Light and crisp fox nuts selected for wholesome everyday snacking.",
+        tag: "Farm selected",
+        weight: "250 g",
+        image: productImages.makhana,
+        imageAlt: "Premium makhana arranged in a ceramic bowl",
+      },
+      {
+        name: "Whole Almonds",
+        description: "Naturally nourishing almonds with a satisfying crunch and rich flavour.",
+        tag: "Natural",
+        weight: "250 g",
+        image: productImages.almonds,
+        imageAlt: "Whole almonds arranged in a ceramic bowl",
+      },
+      {
+        name: "Premium Cashews",
+        description: "Creamy whole cashews chosen for snacking, recipes, and celebrations.",
+        tag: "Premium grade",
+        weight: "250 g",
+        image: productImages.cashews,
+        imageAlt: "Premium whole cashews arranged in a ceramic bowl",
+      },
+      {
+        name: "Signature Dry Fruit Mix",
+        description: "A balanced mix of almonds, walnuts, pistachios, and golden raisins.",
+        tag: "Curated mix",
+        weight: "300 g",
+        image: productImages.premiumMix,
+        imageAlt: "Premium mixed dry fruits arranged in a ceramic bowl",
+      },
+    ],
+  },
+  hi: {
+    promotion: {
+      eyebrow: "नई प्रीमियम रेंज",
+      title: "मखाना और प्रीमियम ड्राई फ्रूट्स देखें",
+      description: "रोज़मर्रा के पोषण और उपहार के लिए देखभाल से चुने गए पौष्टिक विकल्प।",
+      action: "ड्राई फ्रूट्स देखें",
+    },
+    eyebrow: "किसान गौरव उत्पाद",
+    title: "प्रीमियम ड्राई फ्रूट्स और मखाना",
+    description: "भरोसेमंद खेतों से सावधानीपूर्वक प्राप्त किए गए पौष्टिक स्नैक्स।",
+    primaryAction: "अभी देखें",
+    collectionEyebrow: "प्रीमियम चयन",
+    collectionTitle: "हर दिन के लिए पौष्टिक पसंद",
+    collectionDescription:
+      "स्वस्थ स्नैकिंग, पारिवारिक पोषण और खास उपहारों के लिए सावधानी से चुनी गई रेंज देखें।",
+    statusLabel: "जल्द उपलब्ध",
+    products: [
+      {
+        name: "प्रीमियम मखाना",
+        description: "रोज़मर्रा की पौष्टिक स्नैकिंग के लिए चुने गए हल्के और कुरकुरे मखाने।",
+        tag: "खेत से चयनित",
+        weight: "250 ग्राम",
+        image: productImages.makhana,
+        imageAlt: "सिरेमिक कटोरे में रखे प्रीमियम मखाने",
+      },
+      {
+        name: "साबुत बादाम",
+        description: "भरपूर स्वाद और कुरकुरेपन वाले प्राकृतिक और पौष्टिक बादाम।",
+        tag: "प्राकृतिक",
+        weight: "250 ग्राम",
+        image: productImages.almonds,
+        imageAlt: "सिरेमिक कटोरे में रखे साबुत बादाम",
+      },
+      {
+        name: "प्रीमियम काजू",
+        description: "स्नैकिंग, व्यंजनों और उत्सवों के लिए चुने गए मुलायम साबुत काजू।",
+        tag: "प्रीमियम ग्रेड",
+        weight: "250 ग्राम",
+        image: productImages.cashews,
+        imageAlt: "सिरेमिक कटोरे में रखे प्रीमियम साबुत काजू",
+      },
+      {
+        name: "सिग्नेचर ड्राई फ्रूट मिक्स",
+        description: "बादाम, अखरोट, पिस्ता और सुनहरी किशमिश का संतुलित मिश्रण।",
+        tag: "विशेष मिश्रण",
+        weight: "300 ग्राम",
+        image: productImages.premiumMix,
+        imageAlt: "सिरेमिक कटोरे में रखा प्रीमियम ड्राई फ्रूट मिश्रण",
+      },
+    ],
+  },
+};

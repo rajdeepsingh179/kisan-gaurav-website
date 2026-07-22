@@ -1,7 +1,7 @@
 export const homePageContent = {
   en: {
     hero: {
-      eyebrow: "Made for Indian agriculture",
+      eyebrow: "Made for Indian Farmers",
       title: "A trusted digital companion for every Indian farmer.",
       description:
         "Check crop concerns, mandi prices, local weather, government schemes, and advice from fellow farmers without moving between scattered sources.",
@@ -143,7 +143,7 @@ export const homePageContent = {
   },
   hi: {
     hero: {
-      eyebrow: "भारतीय कृषि के लिए बनाया गया",
+      eyebrow: "भारतीय किसानों के लिए बनाया गया",
       title: "हर भारतीय किसान का भरोसेमंद डिजिटल साथी।",
       description:
         "फसल की समस्या, मंडी भाव, स्थानीय मौसम, सरकारी योजनाएँ और किसान साथियों की सलाह—सब एक ही जगह देखें।",

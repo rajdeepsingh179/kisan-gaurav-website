@@ -1,4 +1,5 @@
 import CtaSection from "../components/home/CtaSection";
+import DryFruitPromoBanner from "../components/home/DryFruitPromoBanner";
 import FaqSection from "../components/home/FaqSection";
 import FeaturesSection from "../components/home/FeaturesSection";
 import HeroSection from "../components/home/HeroSection";
@@ -13,6 +14,7 @@ export default function HomePage() {
 
   return (
     <>
+      <DryFruitPromoBanner isAuthenticated={false} />
       <HeroSection />
       <FeaturesSection />
       <StatisticsSection />

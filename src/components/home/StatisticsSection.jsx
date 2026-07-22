@@ -10,7 +10,7 @@ export default function StatisticsSection() {
   const content = homePageContent[language].statistics;
 
   return (
-    <Section tone="primary">
+    <Section className="relative overflow-hidden bg-[radial-gradient(circle_at_85%_0%,var(--kg-primary-700),transparent_32%)]" tone="primary">
       <Reveal>
         <div className="max-w-2xl">
           <p className={cn(typography.eyebrow, "text-primary-300")}>
@@ -22,15 +22,15 @@ export default function StatisticsSection() {
         </div>
       </Reveal>
 
-      <dl className="mt-12 grid gap-px overflow-hidden rounded-card border border-on-primary/10 bg-on-primary/10 sm:grid-cols-2 lg:grid-cols-4">
+      <dl className="mt-14 grid gap-px overflow-hidden rounded-card border border-on-primary/10 bg-on-primary/10 shadow-lifted sm:grid-cols-2 lg:grid-cols-4">
         {content.items.map((stat, index) => (
           <Reveal
-            className="h-full bg-primary-950 p-6 sm:p-8"
+            className="h-full bg-primary-950/90 p-6 transition-colors hover:bg-primary-900 sm:p-8"
             delay={index * motion.stagger}
             key={stat.label}
           >
             <dt className="text-sm leading-6 text-primary-200">{stat.label}</dt>
-            <dd className="order-first mb-3 text-4xl font-semibold tracking-tight text-on-primary">
+            <dd className="order-first mb-3 text-4xl font-[650] tracking-[-0.035em] text-on-primary">
               {stat.value}
             </dd>
           </Reveal>

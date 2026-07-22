@@ -7,6 +7,7 @@ technology-driven, premium, and approachable.
 
 - Primary green communicates trust, progress, and decisive action.
 - Secondary green brings warmth and agricultural energy.
+- Accent orange adds distinctly Indian warmth to high-value actions.
 - Earth brown grounds the palette in land, craft, and human experience.
 - White keeps the experience clear and premium.
 - Neutral grays support readable text, borders, and quiet surfaces.
@@ -32,7 +33,7 @@ exist only once, in `src/index.css`.
 Tokens are defined in `src/index.css` with the `--kg-*` prefix and mapped to
 Tailwind utilities through `@theme inline`.
 
-- Colors: `primary-*`, `secondary-*`, `earth-*`, `neutral-*`, `canvas`,
+- Colors: `primary-*`, `secondary-*`, `accent-*`, `earth-*`, `neutral-*`, `canvas`,
   `surface`, `surface-muted`, `foreground`, `foreground-muted`, `border`, and
   `on-primary`
 - Radius: `rounded-control` and `rounded-card`

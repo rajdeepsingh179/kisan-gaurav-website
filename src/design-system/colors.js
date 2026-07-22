@@ -16,6 +16,7 @@ const palette = (name) =>
 export const colors = Object.freeze({
   primary: palette("primary"),
   secondary: palette("secondary"),
+  accent: palette("accent"),
   earth: palette("earth"),
   neutral: palette("neutral"),
   white: "var(--kg-white)",

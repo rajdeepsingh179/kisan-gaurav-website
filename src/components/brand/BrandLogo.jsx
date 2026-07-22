@@ -11,7 +11,7 @@ export default function BrandLogo({ className, showTagline = false }) {
     <span className={cn("inline-flex items-center gap-3", className)}>
       <BrandMark className="size-10 shrink-0" />
       <span className="text-left">
-        <span className="block font-semibold tracking-tight text-foreground">
+        <span className="block font-bold tracking-[-0.025em] text-foreground">
           {BRAND.name}
         </span>
         {showTagline ? (

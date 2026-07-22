@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Menu, X } from "lucide-react";
+import { Menu, ShoppingBag, X } from "lucide-react";
 import { Link, NavLink } from "react-router-dom";
 
 import { commonContent } from "../data/commonContent";
@@ -13,10 +13,10 @@ import { Button, Container } from "./ui";
 
 function navigationLinkClass({ isActive }) {
   return cn(
-    "rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+    "rounded-control px-3.5 py-2 text-sm font-semibold tracking-[-0.01em] transition-all duration-200",
     isActive
-      ? "bg-primary-50 text-primary-800"
-      : "text-foreground-muted hover:bg-surface-muted hover:text-foreground",
+      ? "bg-primary-50 text-primary-800 shadow-soft"
+      : "text-foreground-muted hover:bg-surface hover:text-primary-800",
   );
 }
 
@@ -24,7 +24,7 @@ function NavigationItem({ item, label, onClick }) {
   if (item.to.includes("#")) {
     return (
       <Link
-        className="rounded-lg px-3 py-2 text-sm font-medium text-foreground-muted transition-colors hover:bg-surface-muted hover:text-foreground"
+        className="rounded-control px-3.5 py-2 text-sm font-semibold tracking-[-0.01em] text-foreground-muted transition-all duration-200 hover:bg-surface hover:text-primary-800"
         onClick={onClick}
         to={item.to}
       >
@@ -77,10 +77,10 @@ export default function Navbar() {
   }, [isOpen]);
 
   return (
-    <header className="sticky top-0 z-50 border-b border-border bg-surface/90 backdrop-blur-xl">
-      <Container>
+    <header className="sticky top-0 z-50 border-b border-primary-900/15 bg-canvas/95 shadow-[0_2px_22px_rgb(23_93_54_/_0.12)] backdrop-blur-2xl supports-[backdrop-filter]:bg-canvas/88">
+      <Container className="max-w-[84rem]">
         <nav
-          className="flex min-h-16 items-center justify-between gap-4"
+          className="flex min-h-18 items-center justify-between gap-5"
           aria-label={content.primaryLabel}
         >
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -94,7 +94,7 @@ export default function Navbar() {
             </Link>
           </div>
 
-          <div className="hidden items-center gap-1 lg:flex">
+          <div className="hidden items-center gap-1.5 xl:flex">
             {navigationItems.map((item) => (
               <NavigationItem
                 item={item}
@@ -104,7 +104,7 @@ export default function Navbar() {
             ))}
           </div>
 
-          <div className="hidden items-center gap-2 lg:flex">
+          <div className="hidden items-center gap-2.5 xl:flex">
             <Button size="sm" variant="outline" onClick={() => openAuthModal("signIn")}>
               Sign In
             </Button>
@@ -116,9 +116,22 @@ export default function Navbar() {
             </Button>
           </div>
 
+          <Button
+            as={Link}
+            aria-label={content.products}
+            className="ml-auto size-11 shrink-0 px-0 sm:w-auto sm:px-3.5 xl:hidden"
+            size="sm"
+            title={content.products}
+            to="/products"
+            variant="accent"
+          >
+            <ShoppingBag aria-hidden="true" className="size-4" />
+            <span className="hidden sm:inline">{content.products}</span>
+          </Button>
+
           <button
             ref={menuButtonRef}
-            className="grid size-11 place-items-center rounded-control text-foreground transition-colors hover:bg-surface-muted lg:hidden"
+            className="grid size-11 place-items-center rounded-control border border-transparent text-foreground transition-all hover:border-border hover:bg-surface hover:shadow-soft xl:hidden"
             type="button"
             aria-controls={menuId}
             aria-expanded={isOpen}
@@ -135,7 +148,7 @@ export default function Navbar() {
 
         {isOpen ? (
           <div
-            className="border-t border-border py-3 lg:hidden"
+            className="border-t border-border/80 py-4 xl:hidden"
             id={menuId}
           >
             <div className="flex flex-col gap-1">
@@ -147,7 +160,7 @@ export default function Navbar() {
                   onClick={closeMenu}
                 />
               ))}
-              <div className="mt-2 grid gap-2 border-t border-border pt-3 sm:grid-cols-3">
+              <div className="mt-2 grid gap-2 border-t border-border pt-3 sm:grid-cols-2">
                 <Button variant="outline" onClick={() => openAuthModal("signIn")}>
                   Sign In
                 </Button>
