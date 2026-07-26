@@ -1,11 +1,10 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Menu, ShoppingBag, X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { Link, NavLink } from "react-router-dom";
 
 import { commonContent } from "../data/commonContent";
 import { navigationItems } from "../data/navigation";
 import useLanguage from "../hooks/useLanguage";
-import useProducts from "../hooks/useProducts";
 import { cn } from "../utils/cn";
 import BrandLogo from "./brand/BrandLogo";
 import LanguageToggle from "./LanguageToggle";
@@ -52,7 +51,6 @@ export default function Navbar() {
   const menuId = useId();
   const menuButtonRef = useRef(null);
   const { language } = useLanguage();
-  const { cartCount } = useProducts();
   const content = commonContent[language].navigation;
 
   const closeMenu = () => setIsOpen(false);
@@ -110,34 +108,11 @@ export default function Navbar() {
             <Button size="sm" variant="outline" onClick={() => openAuthModal("signIn")}>
               Sign In
             </Button>
-            <Button as={Link} className="relative" size="sm" to="/cart" variant="accent">
-              <ShoppingBag aria-hidden="true" className="size-4" />
-              {content.cart}
-              {cartCount ? (
-                <span className="grid min-w-5 place-items-center rounded-full bg-primary-950 px-1 text-[0.65rem] leading-5 text-on-primary" aria-label={`${cartCount} items in cart`}>
-                  {cartCount}
-                </span>
-              ) : null}
-            </Button>
           </div>
-
-          <Button
-            as={Link}
-            aria-label={`${content.cart}${cartCount ? `, ${cartCount} items` : ""}`}
-            className="ml-auto size-11 shrink-0 px-0 sm:w-auto sm:px-3.5 xl:hidden"
-            size="sm"
-            title={content.cart}
-            to="/cart"
-            variant="accent"
-          >
-            <ShoppingBag aria-hidden="true" className="size-4" />
-            <span className="hidden sm:inline">{content.cart}</span>
-            {cartCount ? <span className="grid min-w-5 place-items-center rounded-full bg-primary-950 px-1 text-[0.65rem] leading-5 text-on-primary">{cartCount}</span> : null}
-          </Button>
 
           <button
             ref={menuButtonRef}
-            className="grid size-11 place-items-center rounded-control border border-transparent text-foreground transition-all hover:border-border hover:bg-surface hover:shadow-soft xl:hidden"
+            className="ml-auto grid size-11 place-items-center rounded-control border border-transparent text-foreground transition-all hover:border-border hover:bg-surface hover:shadow-soft xl:hidden"
             type="button"
             aria-controls={menuId}
             aria-expanded={isOpen}
@@ -166,13 +141,9 @@ export default function Navbar() {
                   onClick={closeMenu}
                 />
               ))}
-              <div className="mt-2 grid gap-2 border-t border-border pt-3 sm:grid-cols-2">
-                <Button variant="outline" onClick={() => openAuthModal("signIn")}>
+              <div className="mt-2 border-t border-border pt-3">
+                <Button className="w-full sm:w-auto" variant="outline" onClick={() => openAuthModal("signIn")}>
                   Sign In
-                </Button>
-                <Button as={Link} onClick={closeMenu} to="/cart" variant="accent">
-                  <ShoppingBag aria-hidden="true" className="size-4" />
-                  {content.cart}{cartCount ? ` (${cartCount})` : ""}
                 </Button>
               </div>
             </div>

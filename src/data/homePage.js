@@ -116,12 +116,12 @@ export const homePageContent = {
         {
           question: "What is Kisan Gaurav?",
           answer:
-            "Kisan Gaurav is a premium healthy food brand for Makhana, dry fruits, snacks, and gift packs, as well as a mobile-first digital agriculture platform for Indian farmers.",
+            "Kisan Gaurav is a mobile-first digital agriculture platform that brings practical information and farmer tools together in one clear place.",
         },
         {
           question: "Who is Kisan Gaurav designed for?",
           answer:
-            "Its premium foods are made for families, workplaces, celebrations, and gifting, while its digital services support Indian farmers through field, mandi, and seasonal decisions.",
+            "Kisan Gaurav is designed for Indian farmers making everyday field, mandi, weather, and seasonal decisions.",
         },
         {
           question: "Will Kisan Gaurav work on a mobile phone?",
@@ -258,12 +258,12 @@ export const homePageContent = {
         {
           question: "किसान गौरव क्या है?",
           answer:
-            "किसान गौरव मखाना, ड्राई फ्रूट्स, हेल्दी स्नैक्स और गिफ्ट पैक का प्रीमियम खाद्य ब्रांड है, साथ ही भारतीय किसानों के लिए मोबाइल-प्रथम डिजिटल कृषि प्लेटफ़ॉर्म भी है।",
+            "किसान गौरव एक मोबाइल-प्रथम डिजिटल कृषि प्लेटफ़ॉर्म है, जो उपयोगी जानकारी और किसान सुविधाओं को एक सरल जगह पर लाता है।",
         },
         {
           question: "किसान गौरव किसके लिए बनाया गया है?",
           answer:
-            "इसके प्रीमियम खाद्य परिवारों, कार्यस्थलों, उत्सवों और उपहारों के लिए हैं, जबकि डिजिटल सेवाएँ भारतीय किसानों के खेत, मंडी और मौसमी निर्णयों में सहायता करती हैं।",
+            "किसान गौरव भारतीय किसानों के रोज़मर्रा के खेत, मंडी, मौसम और मौसमी निर्णयों में सहायता के लिए बनाया गया है।",
         },
         {
           question: "क्या किसान गौरव मोबाइल पर चलेगा?",

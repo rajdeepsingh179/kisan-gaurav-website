@@ -1,12 +1,9 @@
-import AboutBrandSection from "../components/home/AboutBrandSection";
-import AgriculturePlatformSection from "../components/home/AgriculturePlatformSection";
-import CommerceHeroSection from "../components/home/CommerceHeroSection";
+import CtaSection from "../components/home/CtaSection";
 import FaqSection from "../components/home/FaqSection";
-import FeaturedProductsSection from "../components/home/FeaturedProductsSection";
-import FoodBenefitsSection from "../components/home/FoodBenefitsSection";
-import PackagingSection from "../components/home/PackagingSection";
-import ReviewsSection from "../components/home/ReviewsSection";
-import ShopByCategorySection from "../components/home/ShopByCategorySection";
+import FeaturesSection from "../components/home/FeaturesSection";
+import HeroSection from "../components/home/HeroSection";
+import StatisticsSection from "../components/home/StatisticsSection";
+import WhySection from "../components/home/WhySection";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 import useLanguage from "../hooks/useLanguage";
 
@@ -16,14 +13,11 @@ export default function HomePage() {
 
   return (
     <>
-      <CommerceHeroSection />
-      <FeaturedProductsSection />
-      <ShopByCategorySection />
-      <FoodBenefitsSection />
-      <PackagingSection />
-      <ReviewsSection />
-      <AgriculturePlatformSection />
-      <AboutBrandSection />
+      <HeroSection />
+      <FeaturesSection />
+      <StatisticsSection />
+      <WhySection />
+      <CtaSection />
       <FaqSection />
     </>
   );

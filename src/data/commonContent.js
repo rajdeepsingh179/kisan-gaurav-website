@@ -2,13 +2,9 @@ export const commonContent = {
   en: {
     navigation: {
       home: "Home",
-      shop: "Shop",
-      categories: "Categories",
       kisanDigital: "Kisan Digital",
-      cart: "Cart",
       about: "About",
       features: "Features",
-      products: "Products",
       weather: "Weather",
       mandi: "Mandi",
       schemes: "Schemes",
@@ -26,7 +22,7 @@ export const commonContent = {
     },
     footer: {
       description:
-        "Crop guidance, mandi awareness, weather context, government schemes, farmer knowledge, and trusted farm-sourced products—brought together for Indian agriculture.",
+        "Crop guidance, mandi awareness, weather context, government schemes, and farmer knowledge—brought together for Indian agriculture.",
       rights: "All rights reserved.",
       privacy: "Privacy",
       terms: "Terms",
@@ -44,13 +40,9 @@ export const commonContent = {
   hi: {
     navigation: {
       home: "मुखपृष्ठ",
-      shop: "दुकान",
-      categories: "श्रेणियाँ",
       kisanDigital: "किसान डिजिटल",
-      cart: "कार्ट",
       about: "हमारे बारे में",
       features: "सुविधाएँ",
-      products: "ड्राई फ्रूट्स",
       weather: "मौसम",
       mandi: "मंडी",
       schemes: "योजनाएँ",
@@ -68,7 +60,7 @@ export const commonContent = {
     },
     footer: {
       description:
-        "फसल मार्गदर्शन, मंडी जानकारी, मौसम, सरकारी योजनाएँ, किसान ज्ञान और भरोसेमंद कृषि-आधारित उत्पाद—भारतीय कृषि के लिए एक ही जगह।",
+        "फसल मार्गदर्शन, मंडी जानकारी, मौसम, सरकारी योजनाएँ और किसान ज्ञान—भारतीय कृषि के लिए एक ही जगह।",
       rights: "सर्वाधिकार सुरक्षित।",
       privacy: "गोपनीयता",
       terms: "नियम",
