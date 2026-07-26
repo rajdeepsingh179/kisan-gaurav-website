@@ -1,28 +1,12 @@
-import { httpsCallable } from "firebase/functions";
-import { functions } from "../firebase";
+import { apiFetch } from "./api";
 
-const localOrders = () => {
-  try { return JSON.parse(window.localStorage.getItem("kg-orders") || "[]"); } catch { return []; }
-};
-
-export async function createOrder(payload) {
-  if (functions) return (await httpsCallable(functions, "createCheckoutOrder")(payload)).data;
-  const order = { ...payload, id: `KG${Date.now().toString().slice(-10)}`, status: "confirmed", createdAt: new Date().toISOString(), tracking: ["Order confirmed"] };
-  window.localStorage.setItem("kg-orders", JSON.stringify([order, ...localOrders()]));
-  return order;
-}
-
-export async function createRazorpayPayment(payload) {
-  if (!functions) throw new Error("Firebase Functions and Razorpay environment values are required for online payment.");
-  return (await httpsCallable(functions, "createRazorpayOrder")(payload)).data;
-}
-
-export async function verifyRazorpayPayment(payload) {
-  if (!functions) throw new Error("Firebase Functions are required to verify payment.");
-  return (await httpsCallable(functions, "verifyRazorpayPayment")(payload)).data;
-}
-
-export function getLocalOrders() { return localOrders(); }
+export const createOrder = (payload) => apiFetch("/api/orders", { method: "POST", body: JSON.stringify(payload) });
+export const createRazorpayPayment = (payload) => apiFetch("/api/payments/razorpay/order", { method: "POST", body: JSON.stringify(payload) });
+export const verifyRazorpayPayment = (payload) => apiFetch("/api/payments/razorpay/verify", { method: "POST", body: JSON.stringify(payload) });
+export const getOrders = () => apiFetch("/api/orders");
+export const cancelOrder = (id) => apiFetch(`/api/orders/${id}/cancel`, { method: "POST", body: "{}" });
+export const requestReturn = (id, reason) => apiFetch(`/api/orders/${id}/return`, { method: "POST", body: JSON.stringify({ reason }) });
+export const invoiceUrl = (id) => `/api/orders/${id}/invoice`;
 
 export function loadRazorpayCheckout() {
   if (window.Razorpay) return Promise.resolve();

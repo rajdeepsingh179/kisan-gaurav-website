@@ -10,7 +10,7 @@ export default function SignUpModal({ isOpen, onClose, onSwitchToSignIn }) {
     event.preventDefault();
     setError("");
     const data = new FormData(event.currentTarget);
-    try { await signUpEmail({ displayName: data.get("fullName"), email: data.get("email"), password: data.get("password") }); onClose(); } catch (reason) { setError(reason.message); }
+    try { await signUpEmail({ displayName: data.get("fullName"), email: data.get("email"), mobile: data.get("mobile"), password: data.get("password") }); onClose(); } catch (reason) { setError(reason.message); }
   };
   const google = async () => {
     setError("");
@@ -24,6 +24,7 @@ export default function SignUpModal({ isOpen, onClose, onSwitchToSignIn }) {
         <form className="space-y-4" onSubmit={submit}>
           <FormField autoComplete="name" label="Full Name" name="fullName" />
           <FormField autoComplete="email" label="Email" name="email" type="email" />
+          <FormField autoComplete="tel" label="Mobile Number" name="mobile" type="tel" />
           <FormField autoComplete="new-password" label="Password" name="password" type="password" />
           <label className="flex items-start gap-3 text-sm text-foreground-muted"><input className="mt-1 accent-primary-700" name="terms" type="checkbox" required />I agree to the Terms &amp; Conditions.</label>
           {error ? <p className="text-sm text-red-700" role="alert">{error}</p> : null}

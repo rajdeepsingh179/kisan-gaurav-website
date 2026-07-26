@@ -5,7 +5,7 @@ import { categoryById } from "../../data/catalog";
 import { useCommerce } from "../../contexts/CommerceContext";
 
 export default function ProductCard({ item, priority = false }) {
-  const { addToCart, toggleWishlist, wishlist } = useCommerce();
+  const { addToCart, moveWishlistToCart, toggleWishlist, wishlist } = useCommerce();
   const wished = wishlist.includes(item.slug);
   return (
     <article className="product-card">
@@ -38,7 +38,7 @@ export default function ProductCard({ item, priority = false }) {
             {item.variants.slice(0, 2).map((variant) => <span key={variant}>{variant}</span>)}
           </div>
         </div>
-        <button className="card-add-button" type="button" onClick={() => addToCart(item, item.variants[0], 1)}><Plus size={14} /> Add to cart</button>
+        <button className="card-add-button" type="button" onClick={() => wished ? moveWishlistToCart(item) : addToCart(item, item.variants[0], 1)}><Plus size={14} /> {wished ? "Move to cart" : "Add to cart"}</button>
       </div>
     </article>
   );

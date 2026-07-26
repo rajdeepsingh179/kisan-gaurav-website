@@ -24,6 +24,7 @@ export default function SignInModal({ isOpen, onClose, onSwitchToSignUp }) {
         <form className="space-y-4" onSubmit={submit}>
           <FormField autoComplete="email" label="Email" name="email" type="email" />
           <FormField autoComplete="current-password" label="Password" name="password" type="password" />
+          <a className="block text-right text-xs font-semibold text-primary-700 hover:underline" href="/forgot-password">Forgot password?</a>
           {error ? <p className="text-sm text-red-700" role="alert">{error}</p> : null}
           <Button className="mt-1 w-full" type="submit">Sign In</Button>
         </form>

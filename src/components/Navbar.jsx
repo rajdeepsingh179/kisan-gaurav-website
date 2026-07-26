@@ -21,7 +21,7 @@ export default function Navbar() {
   const [accordion, setAccordion] = useState(null);
   const [authModal, setAuthModal] = useState(null);
   const { user } = useAuth();
-  const { cartCount } = useCommerce();
+  const { cartCount, setCartOpen } = useCommerce();
   const buttonRef = useRef(null);
   const closeMenu = () => { setOpen(false); setAccordion(null); };
 
@@ -71,7 +71,7 @@ export default function Navbar() {
         </nav>
         <div className="store-nav__actions">
           {user ? <Link className="signin-button" to="/account"><User size={16} /> Account</Link> : <button className="signin-button" onClick={() => setAuthModal("signIn")} type="button">Sign In</button>}
-          <Link className="cart-display" aria-label={`Cart with ${cartCount} items`} to="/cart"><ShoppingBag size={19} /><span>Cart</span><b>{cartCount}</b></Link>
+          <button className="cart-display" aria-label={`Cart with ${cartCount} items`} type="button" onClick={() => setCartOpen(true)}><ShoppingBag size={19} /><span>Cart</span><b>{cartCount}</b></button>
           <button ref={buttonRef} className="menu-button" onClick={() => setOpen((value) => !value)} aria-label={open ? "Close menu" : "Open menu"} type="button">{open ? <X /> : <Menu />}</button>
         </div>
       </header>

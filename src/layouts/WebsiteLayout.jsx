@@ -2,6 +2,7 @@ import { Outlet } from "react-router-dom";
 
 import Footer from "../components/Footer";
 import Navbar from "../components/Navbar";
+import CartDrawer from "../components/storefront/CartDrawer";
 import ScrollToHash from "../components/ScrollToHash";
 import { commonContent } from "../data/commonContent";
 import useLanguage from "../hooks/useLanguage";
@@ -19,6 +20,7 @@ export default function WebsiteLayout() {
         {commonContent[language].skipToContent}
       </a>
       <Navbar />
+      <CartDrawer />
       <main className="flex-1" id="main-content">
         <Outlet />
       </main>

@@ -1,0 +1,25 @@
+name = "kisan-gaurav-api"
+main = "src/index.js"
+compatibility_date = "2026-07-26"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+FRONTEND_URL = "http://localhost:5173"
+AUTH_URL = "http://localhost:8787/api/auth"
+R2_PUBLIC_BASE_URL = "http://localhost:8787/api/media"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "kisan-gaurav-commerce"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "kisan-gaurav-media"
+
+[observability]
+enabled = true
+
+[triggers]
+crons = ["*/5 * * * *"]

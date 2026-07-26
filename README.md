@@ -1,13 +1,15 @@
-# Kisan Gaurav Corporate Website
+# Kisan Gaurav Commerce
 
-The React and Vite corporate website for Kisan Gaurav, focused on clear,
-farmer-first communication for Indian agriculture. It is isolated from and
-does not modify the existing PWA application.
+Production-oriented ecommerce storefront and operations platform for Kisan
+Gaurav. The React 19 application is deployed to Cloudflare Pages; the Hono API
+runs on Cloudflare Workers with D1 for relational data and R2 for media and
+invoices.
 
 ## Local development
 
 ```bash
 npm install
+npm --prefix worker install
 npm run dev
 ```
 
@@ -16,13 +18,21 @@ npm run dev
 ```bash
 npm run lint
 npm run build
+npm run worker:check
 ```
 
-## Cloudflare Pages
+## Cloudflare deployment
 
-- Root directory: `kisan-gaurav-website`
-- Build command: `npm run build`
-- Build output directory: `dist`
-- Environment variable: set `VITE_SITE_URL` to the production URL
+Copy `.env.example` to `.env.local`, then configure the Worker bindings and
+secrets described in [docs/cloudflare-commerce.md](docs/cloudflare-commerce.md).
 
-The `public/_redirects` rule enables React Router routes to load directly.
+```bash
+npx wrangler login
+npx wrangler d1 migrations apply kisan-gaurav-commerce --remote --config worker/wrangler.toml
+npm --prefix worker run deploy
+npm run build
+npm run pages:deploy
+```
+
+Cloudflare Pages uses `dist` as its build output. `public/_redirects` enables
+direct loading of React Router URLs.
