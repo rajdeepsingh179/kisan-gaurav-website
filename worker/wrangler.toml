@@ -11,7 +11,7 @@ R2_PUBLIC_BASE_URL = "http://localhost:8787/api/media"
 [[d1_databases]]
 binding = "DB"
 database_name = "kisan-gaurav-commerce"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "93f9a8b8-bbed-4750-b160-1a6790a33ede"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
