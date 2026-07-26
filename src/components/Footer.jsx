@@ -1,69 +1,18 @@
+import { ArrowUpRight, Camera, Mail } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import { commonContent } from "../data/commonContent";
-import { BRAND } from "../design-system";
-import useLanguage from "../hooks/useLanguage";
 import BrandLogo from "./brand/BrandLogo";
-import { Container } from "./ui";
-
-const socialPlaceholders = ["LinkedIn", "Instagram", "Facebook"];
 
 export default function Footer() {
-  const { language } = useLanguage();
-  const content = commonContent[language].footer;
-  const legalLinks = [
-    { label: content.privacy, to: "/privacy" },
-    { label: content.terms, to: "/terms" },
-  ];
-
   return (
-    <footer className="scroll-mt-24 border-t border-border bg-[linear-gradient(180deg,var(--kg-color-surface),var(--kg-color-surface-muted))]" id="contact">
-      <Container>
-        <div className="flex flex-col gap-6 border-b border-border py-10 sm:flex-row sm:items-center sm:justify-between">
-          <BrandLogo showTagline />
-          <p className="max-w-md text-sm leading-6 text-foreground-muted sm:text-right">
-            {content.description}
-          </p>
-        </div>
-        <div className="flex flex-col gap-6 py-8 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-foreground-muted">
-            © {new Date().getFullYear()} {BRAND.name}. {content.rights}
-          </p>
-
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-            <nav
-              className="flex items-center gap-4"
-              aria-label={content.legalLabel}
-            >
-              {legalLinks.map((link) => (
-                <Link
-                  className="text-sm text-foreground-muted transition-colors hover:text-foreground"
-                  key={link.to}
-                  to={link.to}
-                >
-                  {link.label}
-                </Link>
-              ))}
-            </nav>
-
-            <span className="hidden h-4 w-px bg-border sm:block" aria-hidden="true" />
-
-            <div
-              className="flex items-center gap-3"
-              aria-label={content.socialLabel}
-            >
-              {socialPlaceholders.map((social) => (
-                <span
-                  className="text-sm text-foreground-muted"
-                  key={social}
-                >
-                  {social}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-      </Container>
+    <footer className="store-footer">
+      <div className="store-footer__top">
+        <div><BrandLogo showTagline /><p>Premium dry fruits, mindful snacking and thoughtful gifts—rooted in the pride of India’s harvests.</p></div>
+        <div><h3>Explore</h3><Link to="/shop">Shop all</Link><Link to="/categories">Categories</Link><Link to="/categories#gifts">Gift packs</Link><Link to="/kisan-digital">Kisan Gaurav Digital</Link></div>
+        <div><h3>Company</h3><Link to="/about">Our story</Link><Link to="/contact">Contact</Link><Link to="/contact">Retail enquiries</Link><Link to="/contact">Corporate gifting</Link></div>
+        <div><h3>Stay close</h3><p>New collections, nourishing ideas and gifting notes.</p><a href="mailto:hello@kisangauraav.com"><Mail size={16} /> hello@kisangauraav.com</a><span><Camera size={16} /> Instagram <ArrowUpRight size={14} /></span></div>
+      </div>
+      <div className="store-footer__bottom"><span>© {new Date().getFullYear()} Kisan Gaurav. All rights reserved.</span><span>Made with respect for the source.</span></div>
     </footer>
   );
 }

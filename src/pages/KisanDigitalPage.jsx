@@ -104,7 +104,7 @@ export default function KisanDigitalPage() {
             const Icon = featureIcons[feature.icon];
             return (
               <Reveal className="h-full" delay={Math.min(index * 0.04, 0.16)} key={feature.id}>
-                <Card className="h-full border-primary-100 transition duration-300 hover:-translate-y-1 hover:border-primary-300 hover:shadow-lifted" padding="lg">
+                <Card className="h-full scroll-mt-28 border-primary-100 transition duration-300 hover:-translate-y-1 hover:border-primary-300 hover:shadow-lifted" id={feature.id} padding="lg">
                   <div className="flex items-start justify-between gap-4">
                     <span className="grid size-12 shrink-0 place-items-center rounded-control bg-primary-700 text-on-primary shadow-soft"><Icon aria-hidden="true" className="size-6" /></span>
                     {feature.status ? <Badge className="px-2.5 py-1 text-[0.65rem]">{feature.status}</Badge> : null}

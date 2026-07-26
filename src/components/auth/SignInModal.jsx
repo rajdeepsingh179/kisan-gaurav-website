@@ -1,35 +1,33 @@
+import { useState } from "react";
+import { useAuth } from "../../contexts/AuthContext";
 import AuthModal, { FormDivider, FormField, GoogleButton } from "./AuthModal";
 import { Button } from "../ui";
 
 export default function SignInModal({ isOpen, onClose, onSwitchToSignUp }) {
+  const { signInEmail, signInGoogle } = useAuth();
+  const [error, setError] = useState("");
+  const submit = async (event) => {
+    event.preventDefault();
+    setError("");
+    const data = new FormData(event.currentTarget);
+    try { await signInEmail(data.get("email"), data.get("password")); onClose(); } catch (reason) { setError(reason.message); }
+  };
+  const google = async () => {
+    setError("");
+    try { await signInGoogle(); onClose(); } catch (reason) { setError(reason.message); }
+  };
   return (
-    <AuthModal
-      description="Welcome back. Sign in to continue your farming journey."
-      isOpen={isOpen}
-      onClose={onClose}
-      title="Sign in to your account"
-    >
+    <AuthModal description="Welcome back. Access your wishlist, addresses and orders." isOpen={isOpen} onClose={onClose} title="Sign in to your account">
       <div className="space-y-5">
-        <GoogleButton label="Continue with Google" />
+        <GoogleButton label="Continue with Google" onClick={google} />
         <FormDivider />
-        <form className="space-y-4" onSubmit={(event) => event.preventDefault()}>
+        <form className="space-y-4" onSubmit={submit}>
           <FormField autoComplete="email" label="Email" name="email" type="email" />
-          <FormField autoComplete="tel" label="Mobile Number" name="mobile" type="tel" />
           <FormField autoComplete="current-password" label="Password" name="password" type="password" />
-          <Button className="mt-1 w-full" type="submit">
-            Sign In
-          </Button>
+          {error ? <p className="text-sm text-red-700" role="alert">{error}</p> : null}
+          <Button className="mt-1 w-full" type="submit">Sign In</Button>
         </form>
-        <p className="text-center text-sm text-foreground-muted">
-          New to Kisan Gaurav?{" "}
-          <button
-            className="font-semibold text-primary-700 underline-offset-4 hover:text-primary-800 hover:underline"
-            type="button"
-            onClick={onSwitchToSignUp}
-          >
-            Create an account
-          </button>
-        </p>
+        <p className="text-center text-sm text-foreground-muted">New to Kisan Gaurav?{" "}<button className="font-semibold text-primary-700 hover:underline" type="button" onClick={onSwitchToSignUp}>Create an account</button></p>
       </div>
     </AuthModal>
   );

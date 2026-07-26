@@ -39,9 +39,9 @@ function GoogleIcon() {
   );
 }
 
-export function GoogleButton({ label }) {
+export function GoogleButton({ label, onClick }) {
   return (
-    <Button className="w-full" variant="secondary" type="button">
+    <Button className="w-full" variant="secondary" type="button" onClick={onClick}>
       <GoogleIcon />
       {label}
     </Button>
