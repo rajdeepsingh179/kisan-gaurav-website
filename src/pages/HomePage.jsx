@@ -43,7 +43,7 @@ export default function HomePage() {
         <div className="category-grid">
           {categories.map((category, index) => (
             <Link className="category-card" key={category.id} to={`/category/${category.id}`}>
-              <img src={categoryImages[category.id]} width="1200" height="1200" loading={index > 2 ? "lazy" : "eager"} alt="" />
+              <img src={categoryImages[category.id]} width="1200" height="1200" loading="lazy" decoding="async" alt="" />
               <div className="category-card__overlay" />
               <span className="category-card__number">{String(index + 1).padStart(2, "0")}</span>
               <div><p>{category.eyebrow}</p><h3>{category.name}</h3><span>Discover <ArrowRight size={16} /></span></div>

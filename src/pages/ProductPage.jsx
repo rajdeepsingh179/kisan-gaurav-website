@@ -20,7 +20,10 @@ export default function ProductPage() {
   const [quantitySelection, setQuantitySelection] = useState({ slug, value: 1 });
   const selectedVariant = variantSelection.slug === slug ? variantSelection.value : item?.variants[0] || "";
   const quantity = quantitySelection.slug === slug ? quantitySelection.value : 1;
-  useDocumentTitle(item?.name || "Product");
+  useDocumentTitle(
+    item?.name || "Product",
+    item ? `${item.note}. Ingredients: ${item.ingredients}. Available in ${item.variants.join(", ")}.` : undefined,
+  );
 
   useEffect(() => {
     if (!item) return;
@@ -50,7 +53,7 @@ export default function ProductPage() {
       <section className="product-detail">
         <div className="product-detail__media">
           {item.badge ? <span className={`product-badge product-badge--${item.badge === "New" ? "new" : "best"}`}>{item.badge}</span> : null}
-          <img src={item.detailImage} width="1800" height="1800" alt={`${item.name} premium packaging and ingredients`} />
+          <img src={item.detailImage} width="1800" height="1800" alt={`${item.name} premium packaging and ingredients`} decoding="async" fetchPriority="high" />
         </div>
         <div className="product-detail__copy">
           <p className="eyebrow">{categoryById[item.category].name}</p>
@@ -64,7 +67,7 @@ export default function ProductPage() {
           <div className="detail-block">
             <span className="detail-label">{item.category === "gifts" ? "Choose format" : "Choose pack size"}</span>
             <div className="size-selector">
-              {item.variants.map((variant) => <button className={selectedVariant === variant ? "is-active" : ""} key={variant} onClick={() => setVariantSelection({ slug, value: variant })} type="button">{variant}</button>)}
+              {item.variants.map((variant) => <button aria-pressed={selectedVariant === variant} className={selectedVariant === variant ? "is-active" : ""} key={variant} onClick={() => setVariantSelection({ slug, value: variant })} type="button">{variant}</button>)}
             </div>
           </div>
           <div className="detail-block detail-block--quantity">
@@ -81,7 +84,7 @@ export default function ProductPage() {
           </div>
           <div className="product-actions">
             <button type="button" onClick={() => addToCart(item, selectedVariant, quantity)}><ShoppingBag size={17} /> Add to cart</button>
-            <button className={wishlist.includes(item.slug) ? "is-active" : ""} type="button" onClick={() => toggleWishlist(item.slug)} aria-label="Toggle wishlist"><Heart size={17} fill={wishlist.includes(item.slug) ? "currentColor" : "none"} /></button>
+            <button className={wishlist.includes(item.slug) ? "is-active" : ""} type="button" onClick={() => toggleWishlist(item.slug)} aria-label={wishlist.includes(item.slug) ? `Remove ${item.name} from wishlist` : `Add ${item.name} to wishlist`}><Heart size={17} fill={wishlist.includes(item.slug) ? "currentColor" : "none"} /></button>
           </div>
         </div>
       </section>

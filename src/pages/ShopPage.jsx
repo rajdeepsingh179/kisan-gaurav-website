@@ -42,11 +42,11 @@ export default function ShopPage() {
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search products or ingredients" type="search" />
             {query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X size={16} /></button> : null}
           </label>
-          <button className="mobile-filter-button" type="button" onClick={() => setMobileFilters((value) => !value)}><SlidersHorizontal size={17} /> Filters</button>
-          <span>{visible.length} products</span>
+          <button className="mobile-filter-button" type="button" aria-controls="product-filters" aria-expanded={mobileFilters} onClick={() => setMobileFilters((value) => !value)}><SlidersHorizontal size={17} aria-hidden="true" /> Filters</button>
+          <span aria-live="polite">{visible.length} products</span>
         </div>
         <div className="catalog-layout">
-          <aside className={`filter-panel ${mobileFilters ? "is-open" : ""}`} aria-label="Product filters">
+          <aside id="product-filters" className={`filter-panel ${mobileFilters ? "is-open" : ""}`} aria-label="Product filters">
             <div className="filter-panel__heading"><strong>Filters</strong><button type="button" onClick={clearFilters}>Clear all</button></div>
             <fieldset>
               <legend>Category</legend>

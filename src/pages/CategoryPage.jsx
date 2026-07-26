@@ -8,7 +8,7 @@ import useDocumentTitle from "../hooks/useDocumentTitle";
 export default function CategoryPage() {
   const { categoryId } = useParams();
   const category = categoryById[categoryId];
-  useDocumentTitle(category?.name || "Category");
+  useDocumentTitle(category?.name || "Category", category?.description);
   if (!category) return <Navigate replace to="/categories" />;
   const items = products.filter((item) => item.category === category.id);
 
@@ -21,7 +21,7 @@ export default function CategoryPage() {
           <h1>{category.name}</h1>
           <p>{category.description}</p>
         </div>
-        <img src={items[0].detailImage} width="1800" height="1800" alt={`${category.name} collection`} />
+        <img src={category.heroImage} width="2000" height="1600" alt={`${category.name} collection`} decoding="async" fetchPriority="high" />
       </section>
       <section className="catalog-section">
         <div className="section-heading section-heading--split">

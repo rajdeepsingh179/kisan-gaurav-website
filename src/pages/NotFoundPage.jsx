@@ -7,10 +7,10 @@ import useLanguage from "../hooks/useLanguage";
 export default function NotFoundPage() {
   const { language } = useLanguage();
   const content = commonContent[language].notFound;
-  useDocumentTitle(content.title);
+  useDocumentTitle(content.title, "The page you requested could not be found.", { noIndex: true });
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl items-center px-4 py-16 sm:px-6 lg:px-8">
+    <div className="mx-auto flex min-h-screen w-full max-w-7xl items-center px-4 py-16 sm:px-6 lg:px-8">
       <div>
         <p className="text-sm font-semibold">404</p>
         <h1 className="mt-3 text-3xl font-semibold tracking-tight">
@@ -20,6 +20,6 @@ export default function NotFoundPage() {
           {content.returnHome}
         </Link>
       </div>
-    </main>
+    </div>
   );
 }
