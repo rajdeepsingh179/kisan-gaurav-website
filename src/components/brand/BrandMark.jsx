@@ -4,7 +4,7 @@ export default function BrandMark({ className, decorative = true }) {
   return (
     <img
       className={cn("rounded-[28%] object-cover shadow-soft", className)}
-      src="/kisan-gaurav-logo.png"
+      src="/kisan-gaurav-logo.webp"
       alt={decorative ? "" : "Kisan Gaurav"}
       aria-hidden={decorative || undefined}
       width="256"
