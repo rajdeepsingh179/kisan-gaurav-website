@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "wrangler deploy --dry-run --outdir dist"
+    "check": "wrangler deploy --dry-run --outdir dist",
+    "admin:create": "node scripts/create-first-admin.mjs"
   },
   "dependencies": {
     "@auth/core": "^0.41.3",

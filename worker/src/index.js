@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { handleAuth, getSession, hashPassword } from "./auth";
+import { handleAuth, getSession, hashPassword, verifyPassword } from "./auth";
 import { calculateCheckout, id, json, persistOrder } from "./commerce";
 
 const app = new Hono();
@@ -20,6 +20,7 @@ app.use("*", async (c, next) => {
 });
 
 const sessionFor = (c) => getSession(c.req.raw, c.env);
+const ADMIN_ROLES = new Set(["SUPER_ADMIN", "ADMIN"]);
 const requireUser = async (c) => {
   const session = await sessionFor(c);
   if (!session) throw new HTTPError(401, "Authentication required.");
@@ -180,7 +181,7 @@ app.get("/api/orders", async (c) => {
 app.get("/api/orders/:id", async (c) => {
   const session = await sessionFor(c);
   const order = await c.env.DB.prepare("SELECT * FROM orders WHERE id=?1").bind(c.req.param("id")).first();
-  if (!order || (order.user_id && order.user_id !== session?.user?.id && session?.user?.role !== "admin")) throw new HTTPError(404, "Order not found.");
+  if (!order || (order.user_id && order.user_id !== session?.user?.id && !ADMIN_ROLES.has(session?.user?.role))) throw new HTTPError(404, "Order not found.");
   const history = (await c.env.DB.prepare("SELECT * FROM order_status_history WHERE order_id=?1 ORDER BY created_at").bind(order.id).all()).results;
   return c.json({ ...order, history });
 });
@@ -201,8 +202,8 @@ app.post("/api/orders/:id/return", async (c) => {
 });
 app.get("/api/orders/:id/invoice", async (c) => {
   const user = await requireUser(c);
-  const order = await c.env.DB.prepare("SELECT invoice_key FROM orders WHERE id=?1 AND (user_id=?2 OR ?3='admin')").bind(c.req.param("id"), user.id, user.role).first();
-  if (!order?.invoice_key) throw new HTTPError(404, "Invoice not found.");
+  const order = await c.env.DB.prepare("SELECT invoice_key,user_id FROM orders WHERE id=?1").bind(c.req.param("id")).first();
+  if (!order?.invoice_key || (order.user_id !== user.id && !ADMIN_ROLES.has(user.role))) throw new HTTPError(404, "Invoice not found.");
   const object = await c.env.MEDIA.get(order.invoice_key);
   return new Response(object.body, { headers: { "Content-Type": "application/json", "Content-Disposition": `attachment; filename="${c.req.param("id")}-invoice.json"` } });
 });
@@ -246,16 +247,15 @@ app.get("/api/content/blog/:slug", async (c) => {
 
 const cmsUser = async (c) => {
   const user = await requireUser(c);
-  if (user.role === "admin") return { ...user, role: "admin" };
+  if (ADMIN_ROLES.has(user.role)) return user;
   const assigned = await c.env.DB.prepare("SELECT role FROM user_permissions WHERE user_id=?1").bind(user.id).first();
-  if (!assigned) throw new HTTPError(403, "CMS access required.");
+  if (!assigned || !ADMIN_ROLES.has(assigned.role)) throw new HTTPError(403, "You do not have administrator permissions.");
   return { ...user, role: assigned.role };
 };
 const canAccess = (role, path, method) => {
-  if (role === "admin") return true;
-  if (role === "staff") return path.includes("/orders") || path.endsWith("/dashboard");
-  if (role === "manager") return !path.includes("/settings") && !path.includes("/activity") && !path.includes("/permissions") && !(method === "DELETE" && path.includes("/customers"));
-  return false;
+  if (!ADMIN_ROLES.has(role)) return false;
+  if (role === "SUPER_ADMIN") return true;
+  return !path.includes("/permissions") && !(method === "DELETE" && path.includes("/customers"));
 };
 const audit = (c, action, resourceType, resourceId, details = {}) => c.env.DB.prepare("INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json,ip_address) VALUES(?1,?2,?3,?4,?5,?6,?7)").bind(id(), c.get("admin").id, action, resourceType, resourceId || null, json(details), c.req.header("CF-Connecting-IP") || null).run();
 
@@ -264,6 +264,16 @@ app.use("/api/admin/*", async (c, next) => {
   if (!canAccess(admin.role, c.req.path, c.req.method)) throw new HTTPError(403, "Your role cannot perform this action.");
   c.set("admin", admin);
   await next();
+});
+app.patch("/api/admin/account/password", async (c) => {
+  const admin=c.get("admin");const data=await body(c);
+  if(String(data.newPassword||"").length<12)throw new HTTPError(400,"New password must contain at least 12 characters.");
+  const stored=await c.env.DB.prepare("SELECT password_hash,password_salt FROM users WHERE id=?1").bind(admin.id).first();
+  if(!stored?.password_hash||!(await verifyPassword(String(data.currentPassword||""),stored.password_salt,stored.password_hash)))throw new HTTPError(400,"Current password is incorrect.");
+  const password=await hashPassword(String(data.newPassword));
+  await c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,must_change_password=0,updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(password.hash,password.salt,admin.id).run();
+  await audit(c,"password_changed","user",admin.id);
+  return c.json({ok:true});
 });
 app.get("/api/admin/dashboard", async (c) => {
   const [revenue, orders, pending, products, categories, customers, inventory, lowStock, today, recent, monthly, topProducts, topCategories] = await c.env.DB.batch([
@@ -562,7 +572,7 @@ app.post("/api/admin/seo", async (c) => {
 });
 app.put("/api/admin/permissions/:userId", async (c) => {
   const data=await body(c);
-  if(!["admin","manager","staff"].includes(data.role))throw new HTTPError(400,"Invalid CMS role.");
+  if(!["SUPER_ADMIN","ADMIN"].includes(data.role))throw new HTTPError(400,"Invalid administrator role.");
   await c.env.DB.prepare("INSERT INTO user_permissions(user_id,role) VALUES(?1,?2) ON CONFLICT(user_id) DO UPDATE SET role=excluded.role,updated_at=CURRENT_TIMESTAMP").bind(c.req.param("userId"),data.role).run();
   await audit(c,"role_changed","user",c.req.param("userId"),{role:data.role});
   return c.json({ok:true});

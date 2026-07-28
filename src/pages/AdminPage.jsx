@@ -4,6 +4,7 @@ import {
   Settings, ShoppingBasket, Tags, TicketPercent, Trash2, Upload, Users, X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Link, Navigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 import { apiFetch } from "../services/api";
@@ -16,6 +17,7 @@ const navigation = [
   ["System", [["settings", Settings, "Site settings"], ["activity", Activity, "Activity logs"]]],
 ];
 const allSections = navigation.flatMap(([, items]) => items);
+const ADMIN_ROLES = new Set(["SUPER_ADMIN", "ADMIN"]);
 const money = (paise = 0) => `₹${(Number(paise) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 const labelFor = (value) => value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
@@ -77,7 +79,7 @@ const defaults = {
 const editable = new Set(["products", "categories", "coupons", "banners", "digital", "seo", "settings", "homepage"]);
 
 export default function AdminPage({ initialModule = "dashboard" }) {
-  const { user, loading, signInEmail, signInGoogle, signOutUser } = useAuth();
+  const { user, loading } = useAuth();
   const [active, setActive] = useState(initialModule);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -97,12 +99,12 @@ export default function AdminPage({ initialModule = "dashboard" }) {
   };
   // The active module is an external data source; changing it intentionally starts a new request.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { if (user && ["admin", "manager", "staff"].includes(user.role)) load(active); }, [active, user]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (user && ADMIN_ROLES.has(user.role)) load(active); }, [active, user]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!notice) return undefined; const timer = setTimeout(() => setNotice(""), 3000); return () => clearTimeout(timer); }, [notice]);
 
   if (loading) return <div className="admin-gate"><span className="admin-spinner" />Checking secure access…</div>;
-  if (!user) return <AdminLogin signInEmail={signInEmail} signInGoogle={signInGoogle} />;
-  if (!["admin", "manager", "staff"].includes(user.role)) return <div className="admin-gate"><ShoppingBasket /><h1>CMS access required</h1><p>Your customer account does not have an administration role.</p><button type="button" onClick={signOutUser}>Sign out</button></div>;
+  if (!user) return <Navigate replace to="/admin/login" />;
+  if (!ADMIN_ROLES.has(user.role)) return <div className="admin-gate"><ShoppingBasket /><h1>Access denied</h1><p>You do not have administrator permissions.</p><Link to="/admin/logout">Sign out</Link></div>;
 
   const title = allSections.find(([id]) => id === active)?.[2] || "Admin";
   const rows = Array.isArray(data) ? data : [];
@@ -139,7 +141,7 @@ export default function AdminPage({ initialModule = "dashboard" }) {
             <button type="button" key={module} className={active === module ? "is-active" : ""} onClick={() => selectModule(module)}><Icon /> <span>{label}</span></button>
           ))}</div>)}
         </nav>
-        <div className="admin-user"><span>{(user.name || user.email || "A")[0].toUpperCase()}</span><div><strong>{user.name || "Administrator"}</strong><small>{labelFor(user.role)}</small></div><button type="button" onClick={signOutUser} aria-label="Sign out"><LogOut /></button></div>
+        <div className="admin-user"><span>{(user.name || user.email || "A")[0].toUpperCase()}</span><div><strong>{user.name || "Administrator"}</strong><small>{labelFor(user.role)}</small></div><Link to="/admin/logout" aria-label="Sign out"><LogOut /></Link></div>
       </aside>
       {mobileNav ? <button className="admin-scrim" type="button" aria-label="Close navigation" onClick={() => setMobileNav(false)} /> : null}
       <main>
@@ -152,6 +154,7 @@ export default function AdminPage({ initialModule = "dashboard" }) {
         <div className="admin-content">
           <div className="admin-heading"><div><p>Commerce / {title}</p><h1>{title}</h1></div>{editable.has(active) && active !== "settings" && active !== "homepage" ? <button type="button" className="admin-primary" onClick={() => openEditor()}><Plus /> Add {active === "seo" ? "entry" : active.slice(0, -1)}</button> : null}</div>
           {notice ? <div className="admin-notice" role="status">{notice}</div> : null}
+          {user.mustChangePassword ? <div className="admin-security-warning"><strong>Secure your Super Admin account.</strong><span>The initial password must be replaced before regular administration.</span><Link to="/admin/change-password">Change password now</Link></div> : null}
           {error ? <div className="admin-error" role="alert">{error}<button type="button" onClick={() => setError("")}><X /></button></div> : null}
           {busy && data === null ? <div className="admin-loading"><span className="admin-spinner" /> Loading workspace…</div> : null}
           {active === "dashboard" && data ? <Dashboard data={data} onNavigate={selectModule} /> : null}
@@ -163,12 +166,6 @@ export default function AdminPage({ initialModule = "dashboard" }) {
       {editor ? <Editor module={active} value={editor} onClose={() => setEditor(null)} onSaved={async () => { setEditor(null); setNotice("Changes saved"); await load(); }} setError={setError} /> : null}
     </div>
   );
-}
-
-function AdminLogin({ signInEmail, signInGoogle }) {
-  const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
-  const submit = async (event) => { event.preventDefault(); setBusy(true); setError(""); try { await signInEmail(email, password); } catch (reason) { setError(reason.message); } finally { setBusy(false); } };
-  return <div className="admin-login"><section><div className="admin-login__brand"><ShoppingBasket /><span><strong>Kisan Gaurav</strong><small>Commerce administration</small></span></div><div className="admin-login__copy"><p>Secure operations workspace</p><h1>Run your store.<br />Grow with clarity.</h1><span>Products, orders, content and customers in one Cloudflare-native workspace.</span></div></section><main><form onSubmit={submit}><p>Welcome back</p><h2>Sign in to Admin</h2><span>Use your authorized Kisan Gaurav account.</span>{error ? <div className="admin-error">{error}</div> : null}<label>Email address<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input type="password" autoComplete="current-password" required minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} /></label><button className="admin-primary" disabled={busy}>{busy ? "Signing in…" : "Sign in securely"}</button><div className="admin-login__divider"><span>or</span></div><button type="button" className="admin-google" onClick={signInGoogle}>Continue with Google</button><a href="/forgot-password">Forgot password?</a></form></main></div>;
 }
 
 function Dashboard({ data, onNavigate }) {
@@ -183,21 +180,30 @@ function Dashboard({ data, onNavigate }) {
 }
 
 function DataTable({ module, rows, onEdit, onDelete, onReload, setError, setNotice }) {
-  const config = columns[module] || [];
-  const dragId = useRef(null);
-  const changeStatus = async (row, status) => { try { await apiFetch(`/api/admin/orders/${row.id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }); setNotice("Order status updated"); await onReload(); } catch (reason) { setError(reason.message); } };
-  const moderate = async (row, patch) => { try { await apiFetch(`/api/admin/reviews/${row.id}`, { method: "PATCH", body: JSON.stringify(patch) }); setNotice("Review updated"); await onReload(); } catch (reason) { setError(reason.message); } };
-  const updateStock = async (row, stock) => { try { await apiFetch("/api/admin/inventory/bulk", { method: "PATCH", body: JSON.stringify({ items: [{ variantId: row.id, stock: Number(stock), change: Number(stock) - Number(row.stock) }] }) }); setNotice("Stock updated"); await onReload(); } catch (reason) { setError(reason.message); } };
-  const duplicate = async (row) => { try { await apiFetch(`/api/admin/products/${row.id}/duplicate`, { method: "POST" }); setNotice("Product duplicated as a draft"); await onReload(); } catch (reason) { setError(reason.message); } };
-  const saveRole = async (row, role) => { try { await apiFetch(`/api/admin/permissions/${row.id}`, { method: "PUT", body: JSON.stringify({ role }) }); setNotice("CMS role updated"); await onReload(); } catch (reason) { setError(reason.message); } };
+  const config = columns[module] || []; const dragId = useRef(null);
+  const request = async (path, options, message) => { try { await apiFetch(path, options); setNotice(message); await onReload(); } catch (reason) { setError(reason.message); } };
+  const changeStatus = (row, status) => request(`/api/admin/orders/${row.id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }, "Order status updated");
+  const moderate = (row, patch) => request(`/api/admin/reviews/${row.id}`, { method: "PATCH", body: JSON.stringify(patch) }, "Review updated");
+  const updateStock = (row, stock) => request("/api/admin/inventory/bulk", { method: "PATCH", body: JSON.stringify({ items: [{ variantId: row.id, stock: Number(stock), change: Number(stock) - Number(row.stock) }] }) }, "Stock updated");
+  const duplicate = (row) => request(`/api/admin/products/${row.id}/duplicate`, { method: "POST" }, "Product duplicated as a draft");
+  const saveRole = (row, role) => request(`/api/admin/permissions/${row.id}`, { method: "PUT", body: JSON.stringify({ role }) }, "Administrator role updated");
   const dropCategory = async (targetId) => {
     if (!dragId.current || dragId.current === targetId) return;
     const reordered = [...rows]; const from = reordered.findIndex((row) => row.id === dragId.current); const to = reordered.findIndex((row) => row.id === targetId);
     const [moved] = reordered.splice(from, 1); reordered.splice(to, 0, moved);
-    try { await apiFetch("/api/admin/categories/reorder", { method: "PATCH", body: JSON.stringify({ items: reordered.map(({ id }) => ({ id })) }) }); setNotice("Category order updated"); await onReload(); } catch (reason) { setError(reason.message); }
+    await request("/api/admin/categories/reorder", { method: "PATCH", body: JSON.stringify({ items: reordered.map(({ id }) => ({ id })) }) }, "Category order updated");
+  };
+  const actions = (row) => {
+    if (module === "orders") return <select className="admin-status-select" value={row.status} onChange={(event) => changeStatus(row, event.target.value)}>{["pending","confirmed","packed","shipped","delivered","cancelled","returned","refunded"].map((value)=><option key={value}>{value}</option>)}</select>;
+    if (module === "inventory") return <StockEditor row={row} onSave={updateStock} />;
+    if (module === "customers") return <select className="admin-status-select" value={ADMIN_ROLES.has(row.role) ? row.role : ""} onChange={(event)=>event.target.value && saveRole(row,event.target.value)}><option value="">No admin access</option><option value="ADMIN">Admin</option><option value="SUPER_ADMIN">Super Admin</option></select>;
+    if (module === "reviews") return <div className="admin-row-actions"><button type="button" onClick={()=>moderate(row,{status:row.status==="published"?"rejected":"published"})}>{row.status==="published"?"Reject":"Approve"}</button><button type="button" onClick={()=>moderate(row,{featured:!row.featured})}>{row.featured?"Unfeature":"Feature"}</button><button type="button" className="is-danger" onClick={()=>onDelete(row)}><Trash2 /></button></div>;
+    if (!editable.has(module)) return null;
+    return <div className="admin-row-actions"><button type="button" onClick={()=>onEdit(row)}>Edit</button>{module==="products"?<button type="button" onClick={()=>duplicate(row)}>Duplicate</button>:null}{["products","categories"].includes(module)?<button type="button" className="is-danger" onClick={()=>onDelete(row)}><Trash2 /></button>:null}</div>;
   };
   if (!rows.length) return <section className="admin-panel"><Empty /></section>;
-  return <section className="admin-panel admin-data"><div className="admin-table-meta"><span>{rows.length} records</span><span>{module === "categories" ? "Drag rows to reorder" : "Database synced"}</span></div><div className="admin-table-scroll"><table><thead><tr>{config.map(([, label]) => <th key={label}>{label}</th>)}{(editable.has(module) || ["orders", "inventory", "reviews", "customers"].includes(module)) ? <th><span className="sr-only">Actions</span></th> : null}</tr></thead><tbody>{rows.map((row) => <tr draggable={module === "categories"} onDragStart={() => { dragId.current = row.id; }} onDragOver={(event) => module === "categories" && event.preventDefault()} onDrop={() => dropCategory(row.id)} key={row.id || row.key || row.month}>{config.map(([key]) => <td key={key}>{renderCell(key, row[key])}</td>)}{module === "orders" ? <td><select className="admin-status-select" value={row.status} onChange={(event) => changeStatus(row, event.target.value)}>{["pending", "confirmed", "packed", "shipped", "delivered", "cancelled", "returned", "refunded"].map((value) => <option key={value}>{value}</option>)}</select></td> : module === "inventory" ? <td><StockEditor row={row} onSave={updateStock} /></td> : module === "customers" ? <td><select className="admin-status-select" value={["admin", "manager", "staff"].includes(row.role) ? row.role : ""} onChange={(event) => event.target.value && saveRole(row, event.target.value)}><option value="">No CMS access</option><option value="admin">Admin</option><option value="manager">Manager</option><option value="staff">Staff</option></select></td> : module === "reviews" ? <td className="admin-row-actions"><button type="button" onClick={() => moderate(row, { status: row.status === "published" ? "rejected" : "published" })}>{row.status === "published" ? "Reject" : "Approve"}</button><button type="button" onClick={() => moderate(row, { featured: !row.featured })}>{row.featured ? "Unfeature" : "Feature"}</button><button type="button" className="is-danger" onClick={() => onDelete(row)} aria-label="Delete review"><Trash2 /></button></td> : editable.has(module) ? <td className="admin-row-actions"><button type="button" onClick={() => onEdit(row)}>Edit</button>{module === "products" ? <button type="button" onClick={() => duplicate(row)}>Duplicate</button> : null}{["products", "categories"].includes(module) ? <button type="button" className="is-danger" onClick={() => onDelete(row)} aria-label="Delete"><Trash2 /></button> : null}</td> : null}</tr>)}</tbody></table></div></section>;
+  const hasActions=editable.has(module)||["orders","inventory","reviews","customers"].includes(module);
+  return <section className="admin-panel admin-data"><div className="admin-table-meta"><span>{rows.length} records</span><span>{module==="categories"?"Drag rows to reorder":"Database synced"}</span></div><div className="admin-table-scroll"><table><thead><tr>{config.map(([,label])=><th key={label}>{label}</th>)}{hasActions?<th><span className="sr-only">Actions</span></th>:null}</tr></thead><tbody>{rows.map((row)=><tr draggable={module==="categories"} onDragStart={()=>{dragId.current=row.id;}} onDragOver={(event)=>module==="categories"&&event.preventDefault()} onDrop={()=>dropCategory(row.id)} key={row.id||row.key||row.month}>{config.map(([key])=><td key={key}>{renderCell(key,row[key])}</td>)}{hasActions?<td>{actions(row)}</td>:null}</tr>)}</tbody></table></div></section>;
 }
 function StockEditor({ row, onSave }) { const [stock, setStock] = useState(row.stock); return <div className="admin-stock-edit"><input type="number" min="0" value={stock} onChange={(event) => setStock(event.target.value)} /><button type="button" disabled={Number(stock) === Number(row.stock)} onClick={() => onSave(row, stock)}>Save</button></div>; }
 

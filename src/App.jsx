@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import { LazyMotion, MotionConfig } from "framer-motion";
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 
 import RouteFallback from "./components/RouteFallback";
 import WebsiteLayout from "./layouts/WebsiteLayout";
@@ -26,6 +26,9 @@ const FaqPage = lazy(() => import("./pages/FaqPage"));
 const LegalPage = lazy(() => import("./pages/LegalPage"));
 const BlogPage = lazy(() => import("./pages/BlogPage"));
 const BlogArticlePage = lazy(() => import("./pages/BlogArticlePage"));
+const AdminLoginPage = lazy(() => import("./pages/AdminLoginPage"));
+const AdminLogoutPage = lazy(() => import("./pages/AdminLogoutPage"));
+const AdminPasswordPage = lazy(() => import("./pages/AdminPasswordPage"));
 
 export default function App() {
   return (
@@ -33,7 +36,11 @@ export default function App() {
       <MotionConfig reducedMotion="user">
         <Suspense fallback={<RouteFallback />}>
           <Routes>
-            <Route path="admin" element={<AdminPage />} />
+            <Route path="admin" element={<Navigate replace to="/admin/dashboard" />} />
+            <Route path="admin/login" element={<AdminLoginPage />} />
+            <Route path="admin/logout" element={<AdminLogoutPage />} />
+            <Route path="admin/change-password" element={<AdminPasswordPage />} />
+            <Route path="admin/dashboard" element={<AdminPage />} />
             <Route path="admin/content" element={<AdminPage initialModule="content" />} />
             <Route element={<WebsiteLayout />}>
               <Route index element={<HomePage />} />

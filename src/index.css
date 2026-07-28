@@ -708,7 +708,7 @@ em { font-family: Georgia, "Times New Roman", serif; font-weight: 400; }
 .admin-user div { display:flex; min-width:0; flex-direction:column; }
 .admin-user strong { overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .admin-user small { margin-top:2px; color:#8fa69a; font-size:9px; }
-.admin-user button { padding:5px; border:0; background:none; color:#8fa69a; cursor:pointer; }
+.admin-user button,.admin-user > a { padding:5px; border:0; background:none; color:#8fa69a; cursor:pointer; }
 .admin-user svg { width:16px; }
 .admin-app > main { min-width:0; }
 .admin-topbar { position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:12px; height:68px; padding:0 34px; border-bottom:1px solid var(--admin-line); background:color-mix(in srgb,var(--admin-panel) 92%,transparent); backdrop-filter:blur(12px); }
@@ -730,6 +730,9 @@ em { font-family: Georgia, "Times New Roman", serif; font-weight: 400; }
 .admin-primary svg { width:15px; height:15px; }
 .admin-notice,.admin-error { display:flex; align-items:center; justify-content:space-between; margin-bottom:18px; padding:12px 15px; border-radius:7px; font-size:12px; }
 .admin-notice { border:1px solid #acd5bc; background:#eaf7ef; color:#22633d; }
+.admin-security-warning { display:flex; align-items:center; gap:12px; margin-bottom:18px; padding:13px 15px; border:1px solid #e1bf70; border-radius:7px; background:#fff7df; color:#765713; font-size:11px; }
+.admin-security-warning span { flex:1; }
+.admin-security-warning a { padding:7px 10px; border-radius:5px; background:#765713; color:#fff; font-size:9px; font-weight:800; }
 .admin-error { border:1px solid #e7baba; background:#fff0f0; color:#8a3030; }
 .admin-error button { border:0; background:none; color:inherit; }
 .admin-error svg { width:15px; }
@@ -899,6 +902,7 @@ em { font-family: Georgia, "Times New Roman", serif; font-weight: 400; }
 .admin-login__copy p { color:#d8b45b; font-size:10px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
 .admin-login__copy h1 { margin:16px 0 22px; font-family:Georgia,serif; font-size:clamp(42px,5vw,72px); font-weight:400; line-height:1.02; }
 .admin-login__copy span { display:block; max-width:480px; color:#b8c9c0; font-size:14px; line-height:1.7; }
+.admin-password-page .admin-login__copy > svg { width:44px; height:44px; color:#d8b45b; }
 .admin-login > main { display:grid; place-items:center; padding:35px; }
 .admin-login form { display:flex; width:min(400px,100%); flex-direction:column; }
 .admin-login form > p { margin:0 0 6px; color:#9b7b31; font-size:10px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
