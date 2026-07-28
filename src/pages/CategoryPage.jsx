@@ -2,13 +2,15 @@ import { ArrowLeft } from "lucide-react";
 import { Link, Navigate, useParams } from "react-router-dom";
 
 import ProductCard from "../components/storefront/ProductCard";
-import { categoryById, products } from "../data/catalog";
+import { useCatalog } from "../contexts/CatalogContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 
 export default function CategoryPage() {
+  const { categoryById, products, loading } = useCatalog();
   const { categoryId } = useParams();
   const category = categoryById[categoryId];
   useDocumentTitle(category?.name || "Category", category?.description);
+  if (loading) return <div className="commerce-empty">Loading collection…</div>;
   if (!category) return <Navigate replace to="/categories" />;
   const items = products.filter((item) => item.category === category.id);
 

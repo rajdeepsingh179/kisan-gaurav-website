@@ -2,8 +2,8 @@ import { ChevronDown, Menu, ShoppingBag, User, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 
-import { categories } from "../data/catalog";
 import { useAuth } from "../contexts/AuthContext";
+import { useCatalog } from "../contexts/CatalogContext";
 import { useCommerce } from "../contexts/CommerceContext";
 import BrandLogo from "./brand/BrandLogo";
 import { SignInModal, SignUpModal } from "./auth";
@@ -17,6 +17,7 @@ const digitalLive = [
 const digitalSoon = ["Crop Advisory", "Disease Detection", "AI Assistant"];
 
 export default function Navbar() {
+  const { categories } = useCatalog();
   const [open, setOpen] = useState(false);
   const [accordion, setAccordion] = useState(null);
   const [authModal, setAuthModal] = useState(null);

@@ -35,7 +35,9 @@ export function CommerceProvider({ children }) {
       setCart((current) => {
         const existing = current.find((item) => item.key === key);
         if (existing) return current.map((item) => item.key === key ? { ...item, quantity: Math.min(10, item.quantity + quantity) } : item);
-        return [...current, { key, slug: product.slug, name: product.name, image: product.image, variant, price: product.price + product.variants.indexOf(variant) * (product.category === "gifts" ? 500 : 300), quantity }];
+        const variantRecord = product.variantDetails?.[variant];
+        const price = variantRecord ? Number(variantRecord.festival_price_paise || variantRecord.price_paise || 0) / 100 : product.price;
+        return [...current, { key, slug: product.slug, name: product.name, image: product.image, variant, price, quantity }];
       });
       setCartOpen(true);
     },

@@ -2,7 +2,7 @@ import { ArrowRight, Leaf, PackageCheck, ShieldCheck, Sparkles } from "lucide-re
 import { Link } from "react-router-dom";
 
 import ProductCard from "../components/storefront/ProductCard";
-import { categories, products } from "../data/catalog";
+import { useCatalog } from "../contexts/CatalogContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 
 const categoryImages = {
@@ -15,6 +15,7 @@ const categoryImages = {
 };
 
 export default function HomePage() {
+  const { categories, products } = useCatalog();
   useDocumentTitle("Premium Dry Fruits & Thoughtful Gifting");
   const featured = products.filter((item) => item.featured).slice(0, 8);
 
@@ -43,7 +44,7 @@ export default function HomePage() {
         <div className="category-grid">
           {categories.map((category, index) => (
             <Link className="category-card" key={category.id} to={`/category/${category.id}`}>
-              <img src={categoryImages[category.id]} width="1200" height="1200" loading="lazy" decoding="async" alt="" />
+              <img src={category.thumbnail_url || category.heroImage || categoryImages[category.id]} width="1200" height="1200" loading="lazy" decoding="async" alt="" />
               <div className="category-card__overlay" />
               <span className="category-card__number">{String(index + 1).padStart(2, "0")}</span>
               <div><p>{category.eyebrow}</p><h3>{category.name}</h3><span>Discover <ArrowRight size={16} /></span></div>

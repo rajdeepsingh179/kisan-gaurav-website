@@ -29,6 +29,7 @@ export default function App() {
       <MotionConfig reducedMotion="user">
         <Suspense fallback={<RouteFallback />}>
           <Routes>
+            <Route path="admin" element={<AdminPage />} />
             <Route element={<WebsiteLayout />}>
               <Route index element={<HomePage />} />
               <Route path="shop" element={<ShopPage />} />
@@ -43,7 +44,6 @@ export default function App() {
               <Route path="checkout" element={<CheckoutPage />} />
               <Route path="account" element={<AccountPage />} />
               <Route path="order-success/:orderId" element={<OrderSuccessPage />} />
-              <Route path="admin" element={<AdminPage />} />
               <Route path="forgot-password" element={<PasswordResetPage />} />
               <Route path="reset-password" element={<PasswordResetPage />} />
               <Route path="*" element={<NotFoundPage />} />

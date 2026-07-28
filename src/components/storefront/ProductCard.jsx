@@ -1,10 +1,11 @@
 import { ArrowUpRight, Heart, Plus, Star } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import { categoryById } from "../../data/catalog";
+import { useCatalog } from "../../contexts/CatalogContext";
 import { useCommerce } from "../../contexts/CommerceContext";
 
 export default function ProductCard({ item, priority = false }) {
+  const { categoryById } = useCatalog();
   const { addToCart, moveWishlistToCart, toggleWishlist, wishlist } = useCommerce();
   const wished = wishlist.includes(item.slug);
   return (
@@ -28,7 +29,7 @@ export default function ProductCard({ item, priority = false }) {
         <button className={`wishlist-button ${wished ? "is-active" : ""}`} type="button" onClick={() => toggleWishlist(item.slug)} aria-label={wished ? `Remove ${item.name} from wishlist` : `Add ${item.name} to wishlist`}><Heart size={16} fill={wished ? "currentColor" : "none"} /></button>
       </div>
       <div className="product-card__body">
-        <p className="product-card__category">{categoryById[item.category].name}</p>
+        <p className="product-card__category">{categoryById[item.category]?.name || "Kisan Gaurav"}</p>
         <h3><Link to={`/shop/${item.slug}`}>{item.name}</Link></h3>
         <div className="product-card__rating" aria-label={`${item.rating} out of 5 stars, ${item.reviewCount} reviews`}>
           <Star size={13} fill="currentColor" aria-hidden="true" /><strong>{item.rating}</strong><span>({item.reviewCount})</span>

@@ -4,9 +4,7 @@ compatibility_date = "2026-07-26"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-FRONTEND_URL = "http://localhost:5173"
-AUTH_URL = "http://localhost:8787/api/auth"
-R2_PUBLIC_BASE_URL = "http://localhost:8787/api/media"
+FRONTEND_URL = "https://kisangaurav.com"
 
 [[d1_databases]]
 binding = "DB"

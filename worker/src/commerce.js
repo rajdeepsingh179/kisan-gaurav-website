@@ -1,5 +1,3 @@
-import { catalog } from "./catalog";
-
 export const id = () => crypto.randomUUID();
 export const json = (value) => JSON.stringify(value);
 
@@ -7,13 +5,12 @@ export async function calculateCheckout(env, payload) {
   if (!Array.isArray(payload.items) || payload.items.length === 0) throw new Error("Cart is empty.");
   const items = [];
   for (const requested of payload.items) {
-    const embedded = catalog[requested.slug];
-    if (!embedded || !embedded.variants[requested.variant]) throw new Error(`Unavailable product or variant: ${requested.slug}`);
-    const dbVariant = await env.DB.prepare("SELECT v.id,v.sku,v.price_paise,v.stock,p.id product_id,p.name FROM product_variants v JOIN products p ON p.id=v.product_id WHERE p.slug=?1 AND v.name=?2 AND p.active=1 AND v.active=1").bind(requested.slug, requested.variant).first();
+    const dbVariant = await env.DB.prepare("SELECT v.id,v.sku,v.price_paise,v.festival_price_paise,v.stock,p.id product_id,p.name FROM product_variants v JOIN products p ON p.id=v.product_id WHERE p.slug=?1 AND v.name=?2 AND p.active=1 AND p.archived=0 AND p.status='published' AND v.active=1").bind(requested.slug, requested.variant).first();
+    if (!dbVariant) throw new Error(`Unavailable product or variant: ${requested.slug}`);
     const quantity = Math.max(1, Math.min(10, Number(requested.quantity) || 1));
-    const unitPrice = dbVariant?.price_paise || embedded.variants[requested.variant];
-    if (dbVariant && dbVariant.stock < quantity) throw new Error(`${dbVariant.name} is out of stock.`);
-    items.push({ productId: dbVariant?.product_id || requested.slug, variantId: dbVariant?.id || `${requested.slug}:${requested.variant}`, sku: dbVariant?.sku || `KG-${requested.slug}-${requested.variant}`, name: dbVariant?.name || embedded.name, variant: requested.variant, pricePaise: unitPrice, quantity });
+    const unitPrice = dbVariant.festival_price_paise || dbVariant.price_paise;
+    if (dbVariant.stock < quantity) throw new Error(`${dbVariant.name} is out of stock.`);
+    items.push({ productId: dbVariant.product_id, variantId: dbVariant.id, sku: dbVariant.sku, name: dbVariant.name, variant: requested.variant, pricePaise: unitPrice, quantity });
   }
   const subtotalPaise = items.reduce((total, item) => total + item.pricePaise * item.quantity, 0);
   let discountPaise = 0;
@@ -43,10 +40,8 @@ export async function persistOrder(env, payload, checkout, userId, payment) {
   ];
   for (const item of checkout.items) {
     statements.push(env.DB.prepare("INSERT INTO order_items(id,order_id,product_id,variant_id,product_name,variant_name,sku,unit_price_paise,quantity) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)").bind(id(), orderId, item.productId, item.variantId, item.name, item.variant, item.sku, item.pricePaise, item.quantity));
-    if (!item.variantId.includes(":")) {
-      statements.push(env.DB.prepare("UPDATE product_variants SET stock=stock-?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2 AND stock>=?1").bind(item.quantity, item.variantId));
-      statements.push(env.DB.prepare("INSERT INTO inventory_history(id,variant_id,change_quantity,balance_after,reason,reference_id,actor_user_id) SELECT ?1,id,?2,stock,'order',?3,?4 FROM product_variants WHERE id=?5").bind(id(), -item.quantity, orderId, userId || null, item.variantId));
-    }
+    statements.push(env.DB.prepare("UPDATE product_variants SET stock=stock-?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2 AND stock>=?1").bind(item.quantity, item.variantId));
+    statements.push(env.DB.prepare("INSERT INTO inventory_history(id,variant_id,change_quantity,balance_after,reason,reference_id,actor_user_id) SELECT ?1,id,?2,stock,'order',?3,?4 FROM product_variants WHERE id=?5").bind(id(), -item.quantity, orderId, userId || null, item.variantId));
   }
   if (checkout.coupon) {
     statements.push(env.DB.prepare("UPDATE coupons SET usage_count=usage_count+1 WHERE id=?1").bind(checkout.coupon.id));

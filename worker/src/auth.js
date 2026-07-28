@@ -31,7 +31,7 @@ export function authConfig(env) {
         credentials: { email: { type: "email" }, password: { type: "password" } },
         authorize: async (credentials) => {
           const email = String(credentials?.email || "").trim().toLowerCase();
-          const user = await env.DB.prepare("SELECT id,email,name,role,profile_photo_url,password_hash,password_salt FROM users WHERE email=?1").bind(email).first();
+          const user = await env.DB.prepare("SELECT u.id,u.email,u.name,COALESCE(up.role,u.role) role,u.profile_photo_url,u.password_hash,u.password_salt FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id WHERE u.email=?1").bind(email).first();
           if (!user?.password_hash || !(await verifyPassword(String(credentials?.password || ""), user.password_salt, user.password_hash))) return null;
           return { id: user.id, email: user.email, name: user.name, role: user.role, image: user.profile_photo_url };
         },
@@ -41,7 +41,7 @@ export function authConfig(env) {
       async signIn({ user, account }) {
         if (account?.provider !== "google") return true;
         const email = String(user.email || "").toLowerCase();
-        let stored = await env.DB.prepare("SELECT id,role FROM users WHERE email=?1").bind(email).first();
+        let stored = await env.DB.prepare("SELECT u.id,COALESCE(up.role,u.role) role FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id WHERE u.email=?1").bind(email).first();
         if (!stored) {
           const id = crypto.randomUUID();
           await env.DB.prepare("INSERT INTO users(id,email,name,profile_photo_url,email_verified_at) VALUES(?1,?2,?3,?4,CURRENT_TIMESTAMP)").bind(id, email, user.name || email, user.image || null).run();
@@ -57,7 +57,7 @@ export function authConfig(env) {
           token.uid = user.id;
           token.role = user.role || "customer";
         } else if (token.email) {
-          const stored = await env.DB.prepare("SELECT id,role FROM users WHERE email=?1").bind(String(token.email).toLowerCase()).first();
+          const stored = await env.DB.prepare("SELECT u.id,COALESCE(up.role,u.role) role FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id WHERE u.email=?1").bind(String(token.email).toLowerCase()).first();
           if (stored) { token.uid = stored.id; token.role = stored.role; }
         }
         return token;

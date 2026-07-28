@@ -4,7 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import ProductCard from "../components/storefront/ProductCard";
 import { useAuth } from "../contexts/AuthContext";
 import { useCommerce } from "../contexts/CommerceContext";
-import { productBySlug } from "../data/catalog";
+import { useCatalog } from "../contexts/CatalogContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 import { API_BASE_URL, apiFetch } from "../services/api";
 import { cancelOrder, getOrders, requestReturn } from "../services/orderService";
@@ -12,6 +12,7 @@ import { cancelOrder, getOrders, requestReturn } from "../services/orderService"
 const tabs = [["profile", User, "Profile"], ["orders", Package, "Orders"], ["addresses", MapPin, "Addresses"], ["wishlist", Heart, "Wishlist"]];
 
 export default function AccountPage() {
+  const { productBySlug } = useCatalog();
   const { user, signOutUser } = useAuth();
   const { wishlist } = useCommerce();
   const [params] = useSearchParams();

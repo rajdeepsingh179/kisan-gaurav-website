@@ -6,7 +6,7 @@ const app = new Hono();
 
 app.use("*", async (c, next) => {
   const origin = c.req.header("Origin");
-  if (origin && (origin === c.env.FRONTEND_URL || origin.endsWith(".pages.dev"))) {
+  if (origin && (origin === c.env.FRONTEND_URL || origin === "https://www.kisangaurav.com" || origin.endsWith(".pages.dev"))) {
     c.header("Access-Control-Allow-Origin", origin);
     c.header("Access-Control-Allow-Credentials", "true");
     c.header("Vary", "Origin");
@@ -24,11 +24,6 @@ const requireUser = async (c) => {
   const session = await sessionFor(c);
   if (!session) throw new HTTPError(401, "Authentication required.");
   return session.user;
-};
-const requireAdmin = async (c) => {
-  const user = await requireUser(c);
-  if (user.role !== "admin") throw new HTTPError(403, "Admin access required.");
-  return user;
 };
 const body = async (c) => {
   try { return await c.req.json(); } catch { throw new HTTPError(400, "Invalid JSON body."); }
@@ -97,7 +92,7 @@ app.post("/api/account/profile-photo", async (c) => {
   if (!(file instanceof File) || !file.type.startsWith("image/") || file.size > 5_000_000) throw new HTTPError(400, "Upload a profile image under 5 MB.");
   const key = `profiles/${user.id}/${crypto.randomUUID()}.${file.type.split("/")[1] || "webp"}`;
   await c.env.MEDIA.put(key, file.stream(), { httpMetadata: { contentType: file.type, cacheControl: "public,max-age=31536000,immutable" } });
-  const url = `${c.env.R2_PUBLIC_BASE_URL}/${key}`;
+  const url = `${new URL(c.req.url).origin}/api/media/${key}`;
   await c.env.DB.prepare("UPDATE users SET profile_photo_url=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2").bind(url, user.id).run();
   return c.json({ url });
 });
@@ -206,15 +201,61 @@ app.post("/api/analytics/events", async (c) => {
   return c.json({ ok: true }, 202);
 });
 
-app.use("/api/admin/*", async (c, next) => { c.set("admin", await requireAdmin(c)); await next(); });
+app.get("/api/catalog", async (c) => {
+  const [categories, products, variants] = await c.env.DB.batch([
+    c.env.DB.prepare("SELECT * FROM categories WHERE active=1 ORDER BY sort_order,name"),
+    c.env.DB.prepare("SELECT p.*,c.slug category_slug,(SELECT ROUND(AVG(r.rating),1) FROM reviews r WHERE r.product_id=p.id AND r.status='published') rating,(SELECT COUNT(*) FROM reviews r WHERE r.product_id=p.id AND r.status='published') review_count FROM products p JOIN categories c ON c.id=p.category_id WHERE p.active=1 AND p.archived=0 AND p.status='published' ORDER BY p.featured DESC,p.created_at DESC"),
+    c.env.DB.prepare("SELECT * FROM product_variants WHERE active=1 ORDER BY is_default DESC,created_at"),
+  ]);
+  const variantsByProduct = Object.groupBy(variants.results, (variant) => variant.product_id);
+  return c.json({ categories: categories.results, products: products.results.map((product) => ({ ...product, variants: variantsByProduct[product.id] || [] })) });
+});
+app.get("/api/content/homepage", async (c) => c.json((await c.env.DB.prepare("SELECT * FROM homepage_sections WHERE enabled=1 ORDER BY sort_order").all()).results));
+app.get("/api/content/digital", async (c) => c.json((await c.env.DB.prepare("SELECT * FROM digital_content WHERE status='published' ORDER BY featured DESC,published_at DESC").all()).results));
+
+const cmsUser = async (c) => {
+  const user = await requireUser(c);
+  if (user.role === "admin") return { ...user, role: "admin" };
+  const assigned = await c.env.DB.prepare("SELECT role FROM user_permissions WHERE user_id=?1").bind(user.id).first();
+  if (!assigned) throw new HTTPError(403, "CMS access required.");
+  return { ...user, role: assigned.role };
+};
+const canAccess = (role, path, method) => {
+  if (role === "admin") return true;
+  if (role === "staff") return path.includes("/orders") || path.endsWith("/dashboard");
+  if (role === "manager") return !path.includes("/settings") && !path.includes("/activity") && !path.includes("/permissions") && !(method === "DELETE" && path.includes("/customers"));
+  return false;
+};
+const audit = (c, action, resourceType, resourceId, details = {}) => c.env.DB.prepare("INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json,ip_address) VALUES(?1,?2,?3,?4,?5,?6,?7)").bind(id(), c.get("admin").id, action, resourceType, resourceId || null, json(details), c.req.header("CF-Connecting-IP") || null).run();
+
+app.use("/api/admin/*", async (c, next) => {
+  const admin = await cmsUser(c);
+  if (!canAccess(admin.role, c.req.path, c.req.method)) throw new HTTPError(403, "Your role cannot perform this action.");
+  c.set("admin", admin);
+  await next();
+});
 app.get("/api/admin/dashboard", async (c) => {
-  const [revenue, orders, customers, lowStock] = await c.env.DB.batch([
+  const [revenue, orders, pending, products, categories, customers, inventory, lowStock, today, recent, monthly, topProducts, topCategories] = await c.env.DB.batch([
     c.env.DB.prepare("SELECT COALESCE(SUM(total_paise),0) value FROM orders WHERE payment_status='paid' OR payment_method='cod'"),
     c.env.DB.prepare("SELECT COUNT(*) value FROM orders"),
+    c.env.DB.prepare("SELECT COUNT(*) value FROM orders WHERE status IN ('pending','confirmed')"),
+    c.env.DB.prepare("SELECT COUNT(*) value FROM products WHERE archived=0"),
+    c.env.DB.prepare("SELECT COUNT(*) value FROM categories WHERE active=1"),
     c.env.DB.prepare("SELECT COUNT(*) value FROM users WHERE role='customer'"),
+    c.env.DB.prepare("SELECT COALESCE(SUM(stock),0) value FROM product_variants WHERE active=1"),
     c.env.DB.prepare("SELECT COUNT(*) value FROM product_variants WHERE stock<=low_stock_threshold"),
+    c.env.DB.prepare("SELECT COUNT(*) value FROM orders WHERE date(created_at)=date('now')"),
+    c.env.DB.prepare("SELECT id,order_number,customer_name,status,total_paise,created_at FROM orders ORDER BY created_at DESC LIMIT 6"),
+    c.env.DB.prepare("SELECT strftime('%Y-%m',created_at) month,COUNT(*) orders,COALESCE(SUM(total_paise),0) revenue_paise FROM orders GROUP BY month ORDER BY month DESC LIMIT 12"),
+    c.env.DB.prepare("SELECT oi.product_name,SUM(oi.quantity) units FROM order_items oi GROUP BY oi.product_id ORDER BY units DESC LIMIT 5"),
+    c.env.DB.prepare("SELECT c.name,SUM(oi.quantity) units FROM order_items oi JOIN products p ON p.id=oi.product_id JOIN categories c ON c.id=p.category_id GROUP BY c.id ORDER BY units DESC LIMIT 5"),
   ]);
-  return c.json({ revenuePaise: revenue.results[0].value, orders: orders.results[0].value, customers: customers.results[0].value, lowStock: lowStock.results[0].value });
+  return c.json({
+    revenuePaise: revenue.results[0].value, orders: orders.results[0].value, pendingOrders: pending.results[0].value,
+    products: products.results[0].value, categories: categories.results[0].value, customers: customers.results[0].value,
+    inventory: inventory.results[0].value, lowStock: lowStock.results[0].value, todayOrders: today.results[0].value,
+    recentOrders: recent.results, monthly: monthly.results.reverse(), topProducts: topProducts.results, topCategories: topCategories.results,
+  });
 });
 app.get("/api/admin/analytics/overview", async (c) => {
   const [monthly, products, categories, sessions] = await c.env.DB.batch([
@@ -226,60 +267,115 @@ app.get("/api/admin/analytics/overview", async (c) => {
   const sessionRow = sessions.results[0] || { sessions: 0, orders: 0 };
   return c.json({ monthly: monthly.results, bestSellingProducts: products.results, topCategories: categories.results, conversionRate: sessionRow.sessions ? sessionRow.orders / sessionRow.sessions * 100 : 0 });
 });
-app.get("/api/admin/inventory/:id/history", async (c) => c.json((await c.env.DB.prepare("SELECT * FROM inventory_history WHERE variant_id=?1 ORDER BY created_at DESC LIMIT 250").bind(c.req.param("id")).all()).results));
+app.get("/api/admin/inventory/:id/history", async (c) => c.json((await c.env.DB.prepare("SELECT h.*,u.name actor_name FROM inventory_history h LEFT JOIN users u ON u.id=h.actor_user_id WHERE h.variant_id=?1 ORDER BY h.created_at DESC LIMIT 250").bind(c.req.param("id")).all()).results));
 app.get("/api/admin/:resource", async (c) => {
   const resource = c.req.param("resource");
   const queries = {
-    products: "SELECT p.*,c.name category_name FROM products p JOIN categories c ON c.id=p.category_id ORDER BY p.created_at DESC",
+    products: "SELECT p.*,c.name category_name,(SELECT COUNT(*) FROM product_variants v WHERE v.product_id=p.id) variant_count,(SELECT COALESCE(SUM(stock),0) FROM product_variants v WHERE v.product_id=p.id) stock FROM products p JOIN categories c ON c.id=p.category_id ORDER BY p.archived,p.updated_at DESC",
     categories: "SELECT * FROM categories ORDER BY sort_order,name",
     orders: "SELECT * FROM orders ORDER BY created_at DESC LIMIT 250",
-    customers: "SELECT id,email,name,mobile,role,created_at FROM users ORDER BY created_at DESC LIMIT 500",
+    customers: "SELECT u.id,u.email,u.name,u.mobile,COALESCE(up.role,u.role) role,u.created_at,(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) orders_count,(SELECT COALESCE(SUM(total_paise),0) FROM orders o WHERE o.user_id=u.id) lifetime_value_paise FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id ORDER BY u.created_at DESC LIMIT 500",
     inventory: "SELECT v.*,p.name product_name FROM product_variants v JOIN products p ON p.id=v.product_id ORDER BY v.stock",
     coupons: "SELECT * FROM coupons ORDER BY created_at DESC",
     reviews: "SELECT r.*,p.name product_name,u.name customer_name FROM reviews r JOIN products p ON p.id=r.product_id JOIN users u ON u.id=r.user_id ORDER BY r.created_at DESC",
     banners: "SELECT * FROM banners ORDER BY sort_order,created_at DESC",
     settings: "SELECT * FROM settings WHERE key NOT LIKE 'payment_intent:%' ORDER BY key",
     analytics: "SELECT strftime('%Y-%m',created_at) month,COUNT(*) orders,SUM(total_paise) revenue_paise FROM orders GROUP BY month ORDER BY month DESC LIMIT 24",
+    media: "SELECT m.*,u.name created_by_name FROM media_assets m LEFT JOIN users u ON u.id=m.created_by ORDER BY m.created_at DESC LIMIT 500",
+    homepage: "SELECT * FROM homepage_sections ORDER BY sort_order",
+    digital: "SELECT * FROM digital_content ORDER BY updated_at DESC",
+    seo: "SELECT * FROM seo_entries ORDER BY route",
+    activity: "SELECT l.*,u.name actor_name,u.email actor_email FROM activity_logs l LEFT JOIN users u ON u.id=l.actor_user_id ORDER BY l.created_at DESC LIMIT 500",
   };
   if (!queries[resource]) throw new HTTPError(404, "Admin module not found.");
   return c.json((await c.env.DB.prepare(queries[resource]).all()).results);
 });
+app.get("/api/admin/products/:id", async (c) => {
+  const [product, variants, media, packaging] = await c.env.DB.batch([
+    c.env.DB.prepare("SELECT * FROM products WHERE id=?1").bind(c.req.param("id")),
+    c.env.DB.prepare("SELECT * FROM product_variants WHERE product_id=?1 ORDER BY is_default DESC,created_at").bind(c.req.param("id")),
+    c.env.DB.prepare("SELECT pm.*,m.url,m.file_name,m.alt_text FROM product_media pm JOIN media_assets m ON m.id=pm.media_id WHERE pm.product_id=?1 ORDER BY pm.sort_order").bind(c.req.param("id")),
+    c.env.DB.prepare("SELECT pa.*,m.url,m.file_name FROM packaging_assets pa JOIN media_assets m ON m.id=pa.media_id WHERE pa.product_id=?1").bind(c.req.param("id")),
+  ]);
+  if (!product.results[0]) throw new HTTPError(404, "Product not found.");
+  return c.json({ ...product.results[0], variants: variants.results, media: media.results, packaging: packaging.results });
+});
 app.post("/api/admin/products", async (c) => {
   const admin = c.get("admin"); const data = await body(c); const productId = data.id || id();
-  await c.env.DB.prepare("INSERT INTO products(id,category_id,name,slug,description,ingredients,image_url,detail_image_url,featured,best_seller,new_arrival,active) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) ON CONFLICT(id) DO UPDATE SET category_id=excluded.category_id,name=excluded.name,description=excluded.description,ingredients=excluded.ingredients,image_url=excluded.image_url,detail_image_url=excluded.detail_image_url,featured=excluded.featured,best_seller=excluded.best_seller,new_arrival=excluded.new_arrival,active=excluded.active,updated_at=CURRENT_TIMESTAMP").bind(productId, data.categoryId, data.name, data.slug, data.description || null, data.ingredients || null, data.imageUrl || null, data.detailImageUrl || null, data.featured ? 1 : 0, data.bestSeller ? 1 : 0, data.newArrival ? 1 : 0, data.active === false ? 0 : 1).run();
-  if (Array.isArray(data.variants)) for (const variant of data.variants) await c.env.DB.prepare("INSERT INTO product_variants(id,product_id,name,sku,price_paise,compare_at_price_paise,stock,low_stock_threshold,active) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET name=excluded.name,sku=excluded.sku,price_paise=excluded.price_paise,compare_at_price_paise=excluded.compare_at_price_paise,stock=excluded.stock,low_stock_threshold=excluded.low_stock_threshold,active=excluded.active,updated_at=CURRENT_TIMESTAMP").bind(variant.id || id(), productId, variant.name, variant.sku, variant.pricePaise, variant.compareAtPricePaise || null, variant.stock || 0, variant.lowStockThreshold || 5, variant.active === false ? 0 : 1).run();
-  await c.env.DB.prepare("INSERT INTO analytics_events(id,user_id,event_name,properties_json) VALUES(?1,?2,'admin_product_save',?3)").bind(id(), admin.id, json({ productId })).run();
+  if (!data.name || !data.slug || !data.categoryId) throw new HTTPError(400, "Name, slug and category are required.");
+  await c.env.DB.prepare(`INSERT INTO products(id,category_id,name,slug,brand,subcategory,description,benefits,ingredients,nutrition,storage,shelf_life,country_of_origin,hsn_code,gst_basis_points,barcode,image_url,detail_image_url,seo_title,seo_description,featured,best_seller,new_arrival,active,status,archived)
+    VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)
+    ON CONFLICT(id) DO UPDATE SET category_id=excluded.category_id,name=excluded.name,slug=excluded.slug,brand=excluded.brand,subcategory=excluded.subcategory,description=excluded.description,benefits=excluded.benefits,ingredients=excluded.ingredients,nutrition=excluded.nutrition,storage=excluded.storage,shelf_life=excluded.shelf_life,country_of_origin=excluded.country_of_origin,hsn_code=excluded.hsn_code,gst_basis_points=excluded.gst_basis_points,barcode=excluded.barcode,image_url=excluded.image_url,detail_image_url=excluded.detail_image_url,seo_title=excluded.seo_title,seo_description=excluded.seo_description,featured=excluded.featured,best_seller=excluded.best_seller,new_arrival=excluded.new_arrival,active=excluded.active,status=excluded.status,archived=excluded.archived,updated_at=CURRENT_TIMESTAMP`)
+    .bind(productId,data.categoryId,data.name,data.slug,data.brand||"Kisan Gaurav",data.subcategory||null,data.description||null,data.benefits||null,data.ingredients||null,data.nutrition||null,data.storage||null,data.shelfLife||null,data.countryOfOrigin||"India",data.hsnCode||null,Number(data.gstBasisPoints)||500,data.barcode||null,data.imageUrl||null,data.detailImageUrl||null,data.seoTitle||null,data.seoDescription||null,data.featured?1:0,data.bestSeller?1:0,data.newArrival?1:0,data.active===false?0:1,data.status||"draft",data.archived?1:0).run();
+  if (Array.isArray(data.variants)) for (const variant of data.variants) await c.env.DB.prepare(`INSERT INTO product_variants(id,product_id,name,sku,price_paise,compare_at_price_paise,mrp_paise,discount_basis_points,festival_price_paise,bulk_price_paise,wholesale_price_paise,stock,low_stock_threshold,weight_grams,is_default,active)
+    VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+    ON CONFLICT(id) DO UPDATE SET name=excluded.name,sku=excluded.sku,price_paise=excluded.price_paise,compare_at_price_paise=excluded.compare_at_price_paise,mrp_paise=excluded.mrp_paise,discount_basis_points=excluded.discount_basis_points,festival_price_paise=excluded.festival_price_paise,bulk_price_paise=excluded.bulk_price_paise,wholesale_price_paise=excluded.wholesale_price_paise,stock=excluded.stock,low_stock_threshold=excluded.low_stock_threshold,weight_grams=excluded.weight_grams,is_default=excluded.is_default,active=excluded.active,updated_at=CURRENT_TIMESTAMP`)
+    .bind(variant.id||id(),productId,variant.name,variant.sku,Number(variant.pricePaise)||0,variant.compareAtPricePaise||null,variant.mrpPaise||null,Number(variant.discountBasisPoints)||0,variant.festivalPricePaise||null,variant.bulkPricePaise||null,variant.wholesalePricePaise||null,Math.max(0,Number(variant.stock)||0),Math.max(0,Number(variant.lowStockThreshold)||5),variant.weightGrams||null,variant.isDefault?1:0,variant.active===false?0:1).run();
+  await Promise.all([audit(c, data.id ? "updated" : "created", "product", productId, { name: data.name }), c.env.DB.prepare("INSERT INTO analytics_events(id,user_id,event_name,properties_json) VALUES(?1,?2,'admin_product_save',?3)").bind(id(), admin.id, json({ productId })).run()]);
   return c.json({ id: productId });
+});
+app.post("/api/admin/products/:id/duplicate", async (c) => {
+  const source = await c.env.DB.prepare("SELECT * FROM products WHERE id=?1").bind(c.req.param("id")).first();
+  if (!source) throw new HTTPError(404, "Product not found.");
+  const productId = id(); const suffix = crypto.randomUUID().slice(0, 6);
+  await c.env.DB.prepare("INSERT INTO products(id,category_id,name,slug,brand,subcategory,description,benefits,ingredients,nutrition,storage,shelf_life,country_of_origin,hsn_code,gst_basis_points,barcode,image_url,detail_image_url,seo_title,seo_description,status,active) SELECT ?1,category_id,name||' (Copy)',slug||'-copy-'||?2,brand,subcategory,description,benefits,ingredients,nutrition,storage,shelf_life,country_of_origin,hsn_code,gst_basis_points,NULL,image_url,detail_image_url,seo_title,seo_description,'draft',0 FROM products WHERE id=?3").bind(productId,suffix,source.id).run();
+  const variants = (await c.env.DB.prepare("SELECT * FROM product_variants WHERE product_id=?1").bind(source.id).all()).results;
+  for (const variant of variants) await c.env.DB.prepare("INSERT INTO product_variants(id,product_id,name,sku,price_paise,compare_at_price_paise,mrp_paise,stock,low_stock_threshold,weight_grams,active) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0)").bind(id(),productId,variant.name,`${variant.sku}-COPY-${suffix}`,variant.price_paise,variant.compare_at_price_paise,variant.mrp_paise,variant.stock,variant.low_stock_threshold,variant.weight_grams).run();
+  await audit(c, "duplicated", "product", productId, { sourceId: source.id });
+  return c.json({ id: productId }, 201);
 });
 app.post("/api/admin/categories", async (c) => {
   const data = await body(c); const categoryId = data.id || id();
-  await c.env.DB.prepare("INSERT INTO categories(id,name,slug,description,image_url,active,sort_order) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET name=excluded.name,slug=excluded.slug,description=excluded.description,image_url=excluded.image_url,active=excluded.active,sort_order=excluded.sort_order,updated_at=CURRENT_TIMESTAMP").bind(categoryId,data.name,data.slug,data.description||null,data.imageUrl||null,data.active===false?0:1,data.sortOrder||0).run();
+  await c.env.DB.prepare(`INSERT INTO categories(id,name,slug,description,short_description,long_description,seo_title,seo_description,image_url,hero_image_url,banner_image_url,thumbnail_url,featured,homepage_visible,navigation_visible,active,sort_order)
+    VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+    ON CONFLICT(id) DO UPDATE SET name=excluded.name,slug=excluded.slug,description=excluded.description,short_description=excluded.short_description,long_description=excluded.long_description,seo_title=excluded.seo_title,seo_description=excluded.seo_description,image_url=excluded.image_url,hero_image_url=excluded.hero_image_url,banner_image_url=excluded.banner_image_url,thumbnail_url=excluded.thumbnail_url,featured=excluded.featured,homepage_visible=excluded.homepage_visible,navigation_visible=excluded.navigation_visible,active=excluded.active,sort_order=excluded.sort_order,updated_at=CURRENT_TIMESTAMP`)
+    .bind(categoryId,data.name,data.slug,data.shortDescription||null,data.shortDescription||null,data.longDescription||null,data.seoTitle||null,data.seoDescription||null,data.thumbnailUrl||null,data.heroImageUrl||null,data.bannerImageUrl||null,data.thumbnailUrl||null,data.featured?1:0,data.homepageVisible===false?0:1,data.navigationVisible===false?0:1,data.active===false?0:1,Number(data.sortOrder)||0).run();
+  await audit(c, data.id ? "updated" : "created", "category", categoryId, { name: data.name });
   return c.json({ id: categoryId });
 });
 app.post("/api/admin/coupons", async (c) => {
   const data=await body(c);const couponId=data.id||id();
   if(!["percent","flat"].includes(data.type))throw new HTTPError(400,"Invalid coupon type.");
   await c.env.DB.prepare("INSERT INTO coupons(id,code,type,value,minimum_order_paise,expires_at,usage_limit,enabled) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET code=excluded.code,type=excluded.type,value=excluded.value,minimum_order_paise=excluded.minimum_order_paise,expires_at=excluded.expires_at,usage_limit=excluded.usage_limit,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP").bind(couponId,String(data.code).toUpperCase(),data.type,data.value,data.minimumOrderPaise||0,data.expiresAt||null,data.usageLimit||null,data.enabled===false?0:1).run();
+  await audit(c, data.id ? "updated" : "created", "coupon", couponId, { code: data.code });
   return c.json({id:couponId});
 });
 app.post("/api/admin/banners", async (c) => {
   const data=await body(c);const bannerId=data.id||id();
-  await c.env.DB.prepare("INSERT INTO banners(id,title,subtitle,image_url,link_url,starts_at,ends_at,active,sort_order) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET title=excluded.title,subtitle=excluded.subtitle,image_url=excluded.image_url,link_url=excluded.link_url,starts_at=excluded.starts_at,ends_at=excluded.ends_at,active=excluded.active,sort_order=excluded.sort_order,updated_at=CURRENT_TIMESTAMP").bind(bannerId,data.title,data.subtitle||null,data.imageUrl,data.linkUrl||null,data.startsAt||null,data.endsAt||null,data.active===false?0:1,data.sortOrder||0).run();
+  await c.env.DB.prepare("INSERT INTO banners(id,title,subtitle,image_url,link_url,starts_at,ends_at,active,sort_order,banner_type,device) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET title=excluded.title,subtitle=excluded.subtitle,image_url=excluded.image_url,link_url=excluded.link_url,starts_at=excluded.starts_at,ends_at=excluded.ends_at,active=excluded.active,sort_order=excluded.sort_order,banner_type=excluded.banner_type,device=excluded.device,updated_at=CURRENT_TIMESTAMP").bind(bannerId,data.title,data.subtitle||null,data.imageUrl,data.linkUrl||null,data.startsAt||null,data.endsAt||null,data.active===false?0:1,data.sortOrder||0,data.bannerType||"homepage",data.device||"both").run();
+  await audit(c, data.id ? "updated" : "created", "banner", bannerId, { title: data.title });
   return c.json({id:bannerId});
 });
 app.patch("/api/admin/reviews/:id", async (c) => {
-  const data=await body(c);if(!["pending","published","rejected"].includes(data.status))throw new HTTPError(400,"Invalid review status.");
-  await c.env.DB.prepare("UPDATE reviews SET status=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2").bind(data.status,c.req.param("id")).run();
+  const data=await body(c);if(data.status && !["pending","published","rejected"].includes(data.status))throw new HTTPError(400,"Invalid review status.");
+  await c.env.DB.prepare("UPDATE reviews SET status=COALESCE(?1,status),featured=COALESCE(?2,featured),updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(data.status||null,data.featured===undefined?null:(data.featured?1:0),c.req.param("id")).run();
+  await audit(c, "moderated", "review", c.req.param("id"), data);
   return c.json({ok:true});
 });
 app.put("/api/admin/settings/:key", async (c) => {
   const data=await body(c);
   await c.env.DB.prepare("INSERT INTO settings(key,value_json) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=CURRENT_TIMESTAMP").bind(c.req.param("key"),json(data)).run();
+  await audit(c, "updated", "setting", c.req.param("key"));
   return c.json({ok:true});
 });
 app.delete("/api/admin/products/:id", async (c) => {
-  await c.env.DB.prepare("UPDATE products SET active=0,updated_at=CURRENT_TIMESTAMP WHERE id=?1").bind(c.req.param("id")).run();
+  await c.env.DB.prepare("UPDATE products SET archived=1,active=0,status='archived',updated_at=CURRENT_TIMESTAMP WHERE id=?1").bind(c.req.param("id")).run();
+  await audit(c, "archived", "product", c.req.param("id"));
   return c.json({ ok: true });
+});
+app.delete("/api/admin/categories/:id", async (c) => {
+  const used = await c.env.DB.prepare("SELECT COUNT(*) count FROM products WHERE category_id=?1 AND archived=0").bind(c.req.param("id")).first();
+  if (used.count) throw new HTTPError(409, "Move or archive products in this category first.");
+  await c.env.DB.prepare("DELETE FROM categories WHERE id=?1").bind(c.req.param("id")).run();
+  await audit(c, "deleted", "category", c.req.param("id"));
+  return c.json({ ok: true });
+});
+app.patch("/api/admin/categories/reorder", async (c) => {
+  const data = await body(c);
+  const statements = (data.items || []).map((item, index) => c.env.DB.prepare("UPDATE categories SET sort_order=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2").bind(index * 10, item.id));
+  if (statements.length) await c.env.DB.batch(statements);
+  await audit(c, "reordered", "category", null, { count: statements.length });
+  return c.json({ updated: statements.length });
 });
 app.patch("/api/admin/orders/:id/status", async (c) => {
   const data = await body(c);
@@ -288,6 +384,7 @@ app.patch("/api/admin/orders/:id/status", async (c) => {
     c.env.DB.prepare("UPDATE orders SET status=?1,tracking_number=COALESCE(?2,tracking_number),updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(data.status, data.trackingNumber || null, c.req.param("id")),
     c.env.DB.prepare("INSERT INTO order_status_history(id,order_id,status,note) VALUES(?1,?2,?3,?4)").bind(id(), c.req.param("id"), data.status, data.note || null),
   ]);
+  await audit(c, "status_changed", "order", c.req.param("id"), { status: data.status });
   return c.json({ ok: true });
 });
 app.patch("/api/admin/inventory/bulk", async (c) => {
@@ -301,10 +398,53 @@ app.patch("/api/admin/inventory/bulk", async (c) => {
 });
 app.post("/api/admin/uploads", async (c) => {
   const form = await c.req.formData(); const file = form.get("file");
-  if (!(file instanceof File) || !file.type.startsWith("image/") || file.size > 8_000_000) throw new HTTPError(400, "Upload an image under 8 MB.");
-  const key = `catalog/${crypto.randomUUID()}.${file.type.split("/")[1] || "webp"}`;
+  if (!(file instanceof File) || (!file.type.startsWith("image/") && file.type !== "application/pdf") || file.size > 12_000_000) throw new HTTPError(400, "Upload an image or PDF under 12 MB.");
+  const folder = String(form.get("folder") || "general").replace(/[^a-z0-9_-]/gi, "").slice(0, 40) || "general";
+  const extension = file.name.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || (file.type === "application/pdf" ? "pdf" : "webp");
+  const key = `${folder}/${crypto.randomUUID()}.${extension}`;
   await c.env.MEDIA.put(key, file.stream(), { httpMetadata: { contentType: file.type, cacheControl: "public,max-age=31536000,immutable" } });
-  return c.json({ key, url: `${c.env.R2_PUBLIC_BASE_URL}/${key}` }, 201);
+  const mediaId = id(); const url = `${new URL(c.req.url).origin}/api/media/${key}`;
+  await c.env.DB.prepare("INSERT INTO media_assets(id,key,url,file_name,folder,mime_type,size_bytes,alt_text,created_by) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)").bind(mediaId,key,url,file.name,folder,file.type,file.size,String(form.get("altText")||"")||null,c.get("admin").id).run();
+  await audit(c, "uploaded", "media", mediaId, { fileName: file.name, key });
+  return c.json({ id: mediaId, key, url, fileName: file.name }, 201);
+});
+app.delete("/api/admin/media/:id", async (c) => {
+  const media = await c.env.DB.prepare("SELECT key FROM media_assets WHERE id=?1").bind(c.req.param("id")).first();
+  if (!media) throw new HTTPError(404, "Media not found.");
+  await c.env.MEDIA.delete(media.key);
+  await c.env.DB.prepare("DELETE FROM media_assets WHERE id=?1").bind(c.req.param("id")).run();
+  await audit(c, "deleted", "media", c.req.param("id"), { key: media.key });
+  return c.json({ ok: true });
+});
+app.delete("/api/admin/reviews/:id", async (c) => {
+  await c.env.DB.prepare("DELETE FROM reviews WHERE id=?1").bind(c.req.param("id")).run();
+  await audit(c, "deleted", "review", c.req.param("id"));
+  return c.json({ ok: true });
+});
+app.put("/api/admin/homepage/:id", async (c) => {
+  const data=await body(c);
+  await c.env.DB.prepare("UPDATE homepage_sections SET title=?1,content_json=?2,enabled=?3,sort_order=?4,updated_at=CURRENT_TIMESTAMP WHERE id=?5").bind(data.title||null,json(data.content||{}),data.enabled===false?0:1,Number(data.sortOrder)||0,c.req.param("id")).run();
+  await audit(c,"updated","homepage",c.req.param("id"));
+  return c.json({ok:true});
+});
+app.post("/api/admin/digital", async (c) => {
+  const data=await body(c); const contentId=data.id||id();
+  await c.env.DB.prepare("INSERT INTO digital_content(id,content_type,title,slug,summary,content,image_url,source_url,featured,status,published_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET content_type=excluded.content_type,title=excluded.title,slug=excluded.slug,summary=excluded.summary,content=excluded.content,image_url=excluded.image_url,source_url=excluded.source_url,featured=excluded.featured,status=excluded.status,published_at=excluded.published_at,updated_at=CURRENT_TIMESTAMP").bind(contentId,data.contentType,data.title,data.slug,data.summary||null,data.content||null,data.imageUrl||null,data.sourceUrl||null,data.featured?1:0,data.status||"draft",data.status==="published"?(data.publishedAt||new Date().toISOString()):null).run();
+  await audit(c,data.id?"updated":"created","digital",contentId,{title:data.title});
+  return c.json({id:contentId});
+});
+app.post("/api/admin/seo", async (c) => {
+  const data=await body(c); const seoId=data.id||id();
+  await c.env.DB.prepare("INSERT INTO seo_entries(id,route,meta_title,meta_description,canonical_url,open_graph_json,twitter_json,robots) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET route=excluded.route,meta_title=excluded.meta_title,meta_description=excluded.meta_description,canonical_url=excluded.canonical_url,open_graph_json=excluded.open_graph_json,twitter_json=excluded.twitter_json,robots=excluded.robots,updated_at=CURRENT_TIMESTAMP").bind(seoId,data.route,data.metaTitle||null,data.metaDescription||null,data.canonicalUrl||null,json(data.openGraph||{}),json(data.twitter||{}),data.robots||"index,follow").run();
+  await audit(c,data.id?"updated":"created","seo",seoId,{route:data.route});
+  return c.json({id:seoId});
+});
+app.put("/api/admin/permissions/:userId", async (c) => {
+  const data=await body(c);
+  if(!["admin","manager","staff"].includes(data.role))throw new HTTPError(400,"Invalid CMS role.");
+  await c.env.DB.prepare("INSERT INTO user_permissions(user_id,role) VALUES(?1,?2) ON CONFLICT(user_id) DO UPDATE SET role=excluded.role,updated_at=CURRENT_TIMESTAMP").bind(c.req.param("userId"),data.role).run();
+  await audit(c,"role_changed","user",c.req.param("userId"),{role:data.role});
+  return c.json({ok:true});
 });
 
 export default {

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 
 import ProductCard from "../components/storefront/ProductCard";
-import { categoryById, productBySlug, products } from "../data/catalog";
+import { useCatalog } from "../contexts/CatalogContext";
 import { useCommerce } from "../contexts/CommerceContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 
@@ -14,6 +14,7 @@ const reviews = [
 
 export default function ProductPage() {
   const { slug } = useParams();
+  const { categoryById, productBySlug, products, loading } = useCatalog();
   const { addToCart, toggleWishlist, wishlist } = useCommerce();
   const item = productBySlug[slug];
   const [variantSelection, setVariantSelection] = useState({ slug, value: item?.variants[0] || "" });
@@ -36,14 +37,15 @@ export default function ProductPage() {
     if (!item) return [];
     const stored = JSON.parse(window.localStorage.getItem("kg-recently-viewed") || "[]");
     return stored.filter((value) => value !== item.slug).map((value) => productBySlug[value]).filter(Boolean).slice(0, 4);
-  }, [item]);
+  }, [item, productBySlug]);
 
   const selectedPrice = useMemo(() => {
     if (!item) return 0;
-    const index = Math.max(0, item.variants.indexOf(selectedVariant));
-    return item.price + index * (item.category === "gifts" ? 500 : 300);
+    const variant = item.variantDetails[selectedVariant];
+    return Number(variant?.festival_price_paise || variant?.price_paise || 0) / 100;
   }, [item, selectedVariant]);
 
+  if (loading) return <div className="commerce-empty">Loading product…</div>;
   if (!item) return <Navigate replace to="/shop" />;
   const related = products.filter((product) => product.category === item.category && product.slug !== item.slug).slice(0, 4);
 

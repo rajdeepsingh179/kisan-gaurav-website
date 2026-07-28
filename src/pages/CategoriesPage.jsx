@@ -2,10 +2,11 @@ import { ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import ProductCard from "../components/storefront/ProductCard";
-import { categories, products } from "../data/catalog";
+import { useCatalog } from "../contexts/CatalogContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 
 export default function CategoriesPage() {
+  const { categories, products } = useCatalog();
   useDocumentTitle("Categories");
   return (
     <div className="page-shell">

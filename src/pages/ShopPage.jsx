@@ -3,10 +3,11 @@ import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import ProductCard from "../components/storefront/ProductCard";
-import { categories, products } from "../data/catalog";
+import { useCatalog } from "../contexts/CatalogContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 
 export default function ShopPage() {
+  const { categories, products } = useCatalog();
   const [params] = useSearchParams();
   const initialCategory = categories.some((item) => item.id === params.get("category")) ? params.get("category") : "all";
   const [active, setActive] = useState(initialCategory);
@@ -19,7 +20,7 @@ export default function ShopPage() {
     const matchesCategory = active === "all" || item.category === active;
     const searchText = `${item.name} ${item.ingredients} ${item.note}`.toLowerCase();
     return matchesCategory && item.price <= maxPrice && searchText.includes(query.trim().toLowerCase());
-  }), [active, maxPrice, query]);
+  }), [active, maxPrice, products, query]);
 
   const clearFilters = () => {
     setActive("all");
