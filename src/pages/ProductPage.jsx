@@ -6,6 +6,7 @@ import ProductCard from "../components/storefront/ProductCard";
 import { useCatalog } from "../contexts/CatalogContext";
 import { useCommerce } from "../contexts/CommerceContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
+import { useSiteContent } from "../contexts/SiteContentContext";
 
 const reviews = [
   { name: "Ananya S.", date: "12 July 2026", rating: 5, title: "Beautiful quality and presentation", copy: "Fresh, thoughtfully packed and exactly the kind of premium pantry product I was hoping for." },
@@ -15,8 +16,10 @@ const reviews = [
 export default function ProductPage() {
   const { slug } = useParams();
   const { categoryById, productBySlug, products, loading } = useCatalog();
+  const { get } = useSiteContent();
   const { addToCart, toggleWishlist, wishlist } = useCommerce();
   const item = productBySlug[slug];
+  const managed = get("product_content", slug)?.content || {};
   const [variantSelection, setVariantSelection] = useState({ slug, value: item?.variants[0] || "" });
   const [quantitySelection, setQuantitySelection] = useState({ slug, value: 1 });
   const selectedVariant = variantSelection.slug === slug ? variantSelection.value : item?.variants[0] || "";
@@ -47,7 +50,10 @@ export default function ProductPage() {
 
   if (loading) return <div className="commerce-empty">Loading product…</div>;
   if (!item) return <Navigate replace to="/shop" />;
-  const related = products.filter((product) => product.category === item.category && product.slug !== item.slug).slice(0, 4);
+  const relationProducts = (values = []) => values.map((value) => productBySlug[value] || products.find((product) => product.id === value)).filter(Boolean);
+  const related = managed.relatedProductIds?.length ? relationProducts(managed.relatedProductIds) : products.filter((product) => product.category === item.category && product.slug !== item.slug).slice(0, 4);
+  const crossSell = relationProducts(managed.crossSellProductIds);
+  const upsell = relationProducts(managed.upsellProductIds);
 
   return (
     <div className="page-shell product-page">
@@ -65,7 +71,7 @@ export default function ProductPage() {
             <strong>{item.rating}</strong><span>{item.reviewCount} reviews</span>
           </a>
           <p className="product-detail__price">₹{selectedPrice.toLocaleString("en-IN")} <small>inclusive of taxes</small></p>
-          <p className="product-detail__lead">{item.note}. Packed with care in our signature resealable pantry pouch to help protect natural texture and flavour.</p>
+          <p className="product-detail__lead">{managed.description || item.description || item.note}</p>
           <div className="detail-block">
             <span className="detail-label">{item.category === "gifts" ? "Choose format" : "Choose pack size"}</span>
             <div className="size-selector">
@@ -80,7 +86,9 @@ export default function ProductPage() {
               <button type="button" onClick={() => setQuantitySelection({ slug, value: Math.min(10, quantity + 1) })} aria-label="Increase quantity"><Plus size={15} /></button>
             </div>
           </div>
-          <div className="detail-block"><span className="detail-label">Ingredients</span><p>{item.ingredients}</p></div>
+          {managed.ingredients || item.ingredients ? <div className="detail-block"><span className="detail-label">Ingredients</span><p>{managed.ingredients || item.ingredients}</p></div> : null}
+          {managed.nutrition ? <div className="detail-block"><span className="detail-label">Nutrition</span><p>{managed.nutrition}</p></div> : null}
+          {(managed.benefits || []).length ? <div className="detail-block"><span className="detail-label">Benefits</span><ul>{managed.benefits.map((benefit)=><li key={benefit}>{benefit}</li>)}</ul></div> : null}
           <div className="product-promises">
             <span><Leaf size={18} /> Thoughtfully sourced</span><span><PackageCheck size={18} /> Resealable pack</span><span><ShieldCheck size={18} /> Quality selected</span>
           </div>
@@ -90,6 +98,8 @@ export default function ProductPage() {
           </div>
         </div>
       </section>
+      {(managed.specifications || []).length ? <section className="cms-product-content"><h2>Specifications</h2><dl>{managed.specifications.map((spec)=><div key={spec.label}><dt>{spec.label}</dt><dd>{spec.value}</dd></div>)}</dl></section> : null}
+      {(managed.faqs || []).length ? <section className="cms-product-content"><h2>Product FAQs</h2>{managed.faqs.map((faq)=><details key={faq.question}><summary>{faq.question}</summary><p>{faq.answer}</p></details>)}</section> : null}
       <section className="reviews-section" id="customer-reviews">
         <div className="reviews-summary">
           <p className="eyebrow">Customer reviews</p><h2>Loved in everyday rituals</h2>
@@ -103,6 +113,8 @@ export default function ProductPage() {
         </div>
       </section>
       {related.length > 0 && <section className="related-products"><div className="section-heading"><p className="eyebrow">Related products</p><h2>More from {categoryById[item.category].name}</h2></div><div className="product-grid">{related.map((product) => <ProductCard item={product} key={product.slug} />)}</div></section>}
+      {crossSell.length > 0 && <section className="related-products"><div className="section-heading"><p className="eyebrow">Pairs well with</p><h2>Complete your pantry</h2></div><div className="product-grid">{crossSell.map((product) => <ProductCard item={product} key={product.slug} />)}</div></section>}
+      {upsell.length > 0 && <section className="related-products"><div className="section-heading"><p className="eyebrow">You may also like</p><h2>Premium selections</h2></div><div className="product-grid">{upsell.map((product) => <ProductCard item={product} key={product.slug} />)}</div></section>}
       {recentlyViewed.length > 0 && <section className="recent-products"><div className="section-heading"><p className="eyebrow">Recently viewed</p><h2>Continue exploring</h2></div><div className="product-grid">{recentlyViewed.map((product) => <ProductCard item={product} key={product.slug} />)}</div></section>}
     </div>
   );

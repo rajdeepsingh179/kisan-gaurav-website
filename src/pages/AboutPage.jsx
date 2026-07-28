@@ -1,20 +1,19 @@
 import { Sprout, Sun, Wheat } from "lucide-react";
+import { useSiteContent } from "../contexts/SiteContentContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 
 export default function AboutPage() {
-  useDocumentTitle("About");
-  return (
-    <div className="page-shell">
-      <section className="page-hero">
-        <p className="eyebrow">Rooted in the land</p>
-        <h1>Food with provenance.<br /><em>Goodness with purpose.</em></h1>
-        <p>Kisan Gaurav celebrates the care behind India’s harvests by bringing thoughtfully selected pantry essentials to modern homes.</p>
-      </section>
-      <section className="story-grid">
-        <div className="story-card story-card--dark"><Sprout /><span>01</span><h2>From source</h2><p>We value ingredients for what they are: honest, nourishing and shaped by the people and places that grow them.</p></div>
-        <div className="story-card"><Sun /><span>02</span><h2>Handled with care</h2><p>Our range is selected to honour natural flavour, texture and the everyday rituals in which good food belongs.</p></div>
-        <div className="story-card"><Wheat /><span>03</span><h2>Shared with pride</h2><p>Our signature tractor is a quiet salute to the farmers at the beginning of every food story.</p></div>
-      </section>
-    </div>
-  );
+  const { get, loading } = useSiteContent();
+  const entry = get("page", "about"); const content = entry?.content || {};
+  useDocumentTitle(entry?.title || "About", entry?.excerpt);
+  if (loading) return <div className="commerce-empty">Loading…</div>;
+  return <div className="page-shell">
+    <section className="page-hero"><p className="eyebrow">{entry?.excerpt}</p><h1>{entry?.title}</h1><p>{content.story}</p></section>
+    <section className="story-grid">
+      {[["Mission",content.mission,Sprout],["Vision",content.vision,Sun],["Our Story",content.story,Wheat]].map(([title,copy,Icon],index)=><div className={`story-card${index===0?" story-card--dark":""}`} key={title}><Icon/><span>{String(index+1).padStart(2,"0")}</span><h2>{title}</h2><p>{copy}</p></div>)}
+    </section>
+    {content.founderMessage ? <section className="cms-prose"><h2>Founder&apos;s Message</h2><p>{content.founderMessage}</p></section> : null}
+    {(content.timeline || []).length ? <section className="cms-timeline">{content.timeline.map((item)=><article key={`${item.year}-${item.title}`}><strong>{item.year}</strong><div><h3>{item.title}</h3><p>{item.text}</p></div></article>)}</section> : null}
+    {(content.images || []).length ? <section className="cms-gallery">{content.images.map((image)=><img src={image.url || image} alt={image.alt || ""} key={image.url || image}/>)}</section> : null}
+  </div>;
 }

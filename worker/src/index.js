@@ -32,6 +32,21 @@ class HTTPError extends Error { constructor(status, message) { super(message); t
 
 app.onError((error, c) => c.json({ error: error.message || "Unexpected error." }, error.status || 500));
 app.get("/api/health", (c) => c.json({ ok: true, service: "kisan-gaurav-api", timestamp: new Date().toISOString() }));
+app.get("/sitemap.xml", async (c) => {
+  const [products,content]=await c.env.DB.batch([
+    c.env.DB.prepare("SELECT slug,updated_at FROM products WHERE status='published' AND active=1 AND archived=0"),
+    c.env.DB.prepare("SELECT entry_type,slug,updated_at FROM cms_entries WHERE status='published' AND visibility!='hidden'"),
+  ]);
+  const base=c.env.FRONTEND_URL.replace(/\/$/,""); const fixed=["","shop","categories","about","contact","kisan-digital","blog","faq"];
+  const urls=[...fixed.map((path)=>({loc:`${base}/${path}`,lastmod:new Date().toISOString()})),...products.results.map((row)=>({loc:`${base}/shop/${row.slug}`,lastmod:row.updated_at})),...content.results.filter((row)=>["blog","legal"].includes(row.entry_type)).map((row)=>({loc:`${base}/${row.entry_type==="legal"?"policies":"blog"}/${row.slug}`,lastmod:row.updated_at}))];
+  const xml=`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((item)=>`<url><loc>${item.loc}</loc><lastmod>${item.lastmod}</lastmod></url>`).join("")}</urlset>`;
+  return c.body(xml,200,{"Content-Type":"application/xml; charset=utf-8","Cache-Control":"public,max-age=3600"});
+});
+app.get("/robots.txt", async (c) => {
+  const configured=await c.env.DB.prepare("SELECT content_json FROM cms_entries WHERE entry_type='seo' AND slug='robots' AND status='published'").first();
+  const body=configured?JSON.parse(configured.content_json).body:null;
+  return c.text(body||`User-agent: *\nAllow: /\nDisallow: /admin\nSitemap: ${new URL(c.req.url).origin}/sitemap.xml\n`);
+});
 app.all("/api/auth/*", (c) => handleAuth(c.req.raw, c.env));
 
 app.post("/api/account/signup", async (c) => {
@@ -42,7 +57,10 @@ app.post("/api/account/signup", async (c) => {
   if (existing) throw new HTTPError(409, "An account already exists for this email.");
   const password = await hashPassword(String(data.password));
   const userId = id();
-  await c.env.DB.prepare("INSERT INTO users(id,email,name,mobile,password_hash,password_salt) VALUES(?1,?2,?3,?4,?5,?6)").bind(userId, email, String(data.name).trim(), data.mobile || null, password.hash, password.salt).run();
+  await c.env.DB.batch([
+    c.env.DB.prepare("INSERT INTO users(id,email,name,mobile,password_hash,password_salt) VALUES(?1,?2,?3,?4,?5,?6)").bind(userId, email, String(data.name).trim(), data.mobile || null, password.hash, password.salt),
+    c.env.DB.prepare("INSERT INTO notifications(id,user_id,channel,event_type,recipient,payload_json) VALUES(?1,?2,'email','welcome',?3,?4)").bind(id(),userId,email,json({name:String(data.name).trim()})),
+  ]);
   return c.json({ id: userId, email }, 201);
 });
 
@@ -212,6 +230,19 @@ app.get("/api/catalog", async (c) => {
 });
 app.get("/api/content/homepage", async (c) => c.json((await c.env.DB.prepare("SELECT * FROM homepage_sections WHERE enabled=1 ORDER BY sort_order").all()).results));
 app.get("/api/content/digital", async (c) => c.json((await c.env.DB.prepare("SELECT * FROM digital_content WHERE status='published' ORDER BY featured DESC,published_at DESC").all()).results));
+app.get("/api/content/site", async (c) => {
+  const [entries, menus] = await c.env.DB.batch([
+    c.env.DB.prepare("SELECT id,entry_type,slug,title,excerpt,content_json,seo_json,visibility,parent_id,sort_order,updated_at FROM cms_entries WHERE status='published' AND (publish_at IS NULL OR publish_at<=CURRENT_TIMESTAMP) AND (expires_at IS NULL OR expires_at>CURRENT_TIMESTAMP) ORDER BY entry_type,sort_order"),
+    c.env.DB.prepare("SELECT m.*,a.url media_url FROM menu_items m LEFT JOIN media_assets a ON a.id=m.media_id WHERE m.enabled=1 ORDER BY m.menu_location,m.sort_order"),
+  ]);
+  return c.json({ entries: entries.results, menus: menus.results });
+});
+app.get("/api/content/blog", async (c) => c.json((await c.env.DB.prepare("SELECT id,slug,title,excerpt,content_json,seo_json,publish_at,updated_at FROM cms_entries WHERE entry_type='blog' AND status='published' AND (publish_at IS NULL OR publish_at<=CURRENT_TIMESTAMP) ORDER BY COALESCE(publish_at,created_at) DESC").all()).results));
+app.get("/api/content/blog/:slug", async (c) => {
+  const entry = await c.env.DB.prepare("SELECT * FROM cms_entries WHERE entry_type='blog' AND slug=?1 AND status='published' AND (publish_at IS NULL OR publish_at<=CURRENT_TIMESTAMP)").bind(c.req.param("slug")).first();
+  if (!entry) throw new HTTPError(404, "Article not found.");
+  return c.json(entry);
+});
 
 const cmsUser = async (c) => {
   const user = await requireUser(c);
@@ -286,9 +317,84 @@ app.get("/api/admin/:resource", async (c) => {
     digital: "SELECT * FROM digital_content ORDER BY updated_at DESC",
     seo: "SELECT * FROM seo_entries ORDER BY route",
     activity: "SELECT l.*,u.name actor_name,u.email actor_email FROM activity_logs l LEFT JOIN users u ON u.id=l.actor_user_id ORDER BY l.created_at DESC LIMIT 500",
+    content: "SELECT e.*,u.name updated_by_name FROM cms_entries e LEFT JOIN users u ON u.id=e.updated_by ORDER BY e.entry_type,e.sort_order,e.updated_at DESC",
   };
   if (!queries[resource]) throw new HTTPError(404, "Admin module not found.");
   return c.json((await c.env.DB.prepare(queries[resource]).all()).results);
+});
+app.get("/api/admin/content/:id/versions", async (c) => c.json((await c.env.DB.prepare("SELECT v.*,u.name created_by_name FROM cms_versions v LEFT JOIN users u ON u.id=v.created_by WHERE v.entry_id=?1 ORDER BY v.version DESC").bind(c.req.param("id")).all()).results));
+app.get("/api/admin/content-system/:resource", async (c) => {
+  const queries = {
+    menus: "SELECT m.*,a.url media_url FROM menu_items m LEFT JOIN media_assets a ON a.id=m.media_id ORDER BY m.menu_location,m.sort_order",
+    emails: "SELECT * FROM email_templates ORDER BY name",
+    taxonomies: "SELECT * FROM cms_taxonomies ORDER BY taxonomy_type,sort_order,name",
+  };
+  const query = queries[c.req.param("resource")];
+  if (!query) throw new HTTPError(404, "Content resource not found.");
+  return c.json((await c.env.DB.prepare(query).all()).results);
+});
+app.post("/api/admin/content", async (c) => {
+  const data = await body(c); const entryId = data.id || id(); const existing = data.id ? await c.env.DB.prepare("SELECT * FROM cms_entries WHERE id=?1").bind(data.id).first() : null;
+  if (!data.entryType || !data.slug || !data.title) throw new HTTPError(400, "Content type, slug and title are required.");
+  const version = Number(existing?.current_version || 0) + 1;
+  const contentJson = typeof data.content === "string" ? data.content : json(data.content || {});
+  const seoJson = typeof data.seo === "string" ? data.seo : json(data.seo || {});
+  const snapshot = json({ entryType:data.entryType,slug:data.slug,title:data.title,excerpt:data.excerpt||null,content:JSON.parse(contentJson),seo:JSON.parse(seoJson),status:data.status||"draft",publishAt:data.publishAt||null,expiresAt:data.expiresAt||null,visibility:data.visibility||"sitewide",parentId:data.parentId||null,sortOrder:Number(data.sortOrder)||0 });
+  await c.env.DB.batch([
+    c.env.DB.prepare(`INSERT INTO cms_entries(id,entry_type,slug,title,excerpt,content_json,seo_json,status,publish_at,expires_at,visibility,parent_id,sort_order,current_version,created_by,updated_by)
+      VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15)
+      ON CONFLICT(id) DO UPDATE SET entry_type=excluded.entry_type,slug=excluded.slug,title=excluded.title,excerpt=excluded.excerpt,content_json=excluded.content_json,seo_json=excluded.seo_json,status=excluded.status,publish_at=excluded.publish_at,expires_at=excluded.expires_at,visibility=excluded.visibility,parent_id=excluded.parent_id,sort_order=excluded.sort_order,current_version=excluded.current_version,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`)
+      .bind(entryId,data.entryType,data.slug,data.title,data.excerpt||null,contentJson,seoJson,data.status||"draft",data.publishAt||null,data.expiresAt||null,data.visibility||"sitewide",data.parentId||null,Number(data.sortOrder)||0,version,c.get("admin").id),
+    c.env.DB.prepare("INSERT INTO cms_versions(id,entry_id,version,snapshot_json,change_note,created_by) VALUES(?1,?2,?3,?4,?5,?6)").bind(id(),entryId,version,snapshot,data.changeNote||null,c.get("admin").id),
+  ]);
+  await audit(c, existing ? "updated" : "created", "content", entryId, { entryType:data.entryType,version });
+  return c.json({id:entryId,version});
+});
+app.post("/api/admin/content/:id/rollback/:version", async (c) => {
+  const record = await c.env.DB.prepare("SELECT snapshot_json FROM cms_versions WHERE entry_id=?1 AND version=?2").bind(c.req.param("id"),Number(c.req.param("version"))).first();
+  if (!record) throw new HTTPError(404,"Version not found.");
+  const snapshot = JSON.parse(record.snapshot_json); const current = await c.env.DB.prepare("SELECT current_version FROM cms_entries WHERE id=?1").bind(c.req.param("id")).first();
+  const nextVersion = Number(current.current_version)+1;
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE cms_entries SET entry_type=?1,slug=?2,title=?3,excerpt=?4,content_json=?5,seo_json=?6,status=?7,publish_at=?8,expires_at=?9,visibility=?10,parent_id=?11,sort_order=?12,current_version=?13,updated_by=?14,updated_at=CURRENT_TIMESTAMP WHERE id=?15").bind(snapshot.entryType,snapshot.slug,snapshot.title,snapshot.excerpt||null,json(snapshot.content||{}),json(snapshot.seo||{}),snapshot.status||"draft",snapshot.publishAt||null,snapshot.expiresAt||null,snapshot.visibility||"sitewide",snapshot.parentId||null,Number(snapshot.sortOrder)||0,nextVersion,c.get("admin").id,c.req.param("id")),
+    c.env.DB.prepare("INSERT INTO cms_versions(id,entry_id,version,snapshot_json,change_note,created_by) VALUES(?1,?2,?3,?4,?5,?6)").bind(id(),c.req.param("id"),nextVersion,record.snapshot_json,`Rollback to version ${c.req.param("version")}`,c.get("admin").id),
+  ]);
+  await audit(c,"rolled_back","content",c.req.param("id"),{fromVersion:c.req.param("version"),newVersion:nextVersion});
+  return c.json({ok:true,version:nextVersion});
+});
+app.patch("/api/admin/content/reorder", async (c) => {
+  const data=await body(c); const statements=(data.items||[]).map((item,index)=>c.env.DB.prepare("UPDATE cms_entries SET sort_order=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2").bind(index*10,item.id));
+  if(statements.length)await c.env.DB.batch(statements);
+  await audit(c,"reordered","content",null,{count:statements.length});
+  return c.json({updated:statements.length});
+});
+app.delete("/api/admin/content/:id", async (c) => {
+  await c.env.DB.prepare("DELETE FROM cms_entries WHERE id=?1").bind(c.req.param("id")).run();
+  await audit(c,"deleted","content",c.req.param("id"));
+  return c.json({ok:true});
+});
+app.post("/api/admin/content-system/menus", async (c) => {
+  const data=await body(c); const menuId=data.id||id();
+  await c.env.DB.prepare("INSERT INTO menu_items(id,menu_location,parent_id,label,url,description,media_id,mega_menu,enabled,sort_order) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET menu_location=excluded.menu_location,parent_id=excluded.parent_id,label=excluded.label,url=excluded.url,description=excluded.description,media_id=excluded.media_id,mega_menu=excluded.mega_menu,enabled=excluded.enabled,sort_order=excluded.sort_order,updated_at=CURRENT_TIMESTAMP").bind(menuId,data.menuLocation||"main",data.parentId||null,data.label,data.url,data.description||null,data.mediaId||null,data.megaMenu?1:0,data.enabled===false?0:1,Number(data.sortOrder)||0).run();
+  await audit(c,data.id?"updated":"created","menu",menuId,{label:data.label});
+  return c.json({id:menuId});
+});
+app.delete("/api/admin/content-system/menus/:id", async (c) => {
+  await c.env.DB.prepare("DELETE FROM menu_items WHERE id=?1").bind(c.req.param("id")).run();
+  await audit(c,"deleted","menu",c.req.param("id"));
+  return c.json({ok:true});
+});
+app.patch("/api/admin/content-system/menus/reorder", async (c) => {
+  const data=await body(c);const statements=(data.items||[]).map((item,index)=>c.env.DB.prepare("UPDATE menu_items SET sort_order=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2").bind(index*10,item.id));
+  if(statements.length)await c.env.DB.batch(statements);
+  await audit(c,"reordered","menu",null,{count:statements.length});
+  return c.json({updated:statements.length});
+});
+app.put("/api/admin/content-system/emails/:id", async (c) => {
+  const data=await body(c);
+  await c.env.DB.prepare("UPDATE email_templates SET name=?1,subject=?2,preheader=?3,html_content=?4,text_content=?5,enabled=?6,current_version=current_version+1,updated_by=?7,updated_at=CURRENT_TIMESTAMP WHERE id=?8").bind(data.name,data.subject,data.preheader||null,data.htmlContent,data.textContent||null,data.enabled===false?0:1,c.get("admin").id,c.req.param("id")).run();
+  await audit(c,"updated","email_template",c.req.param("id"),{name:data.name});
+  return c.json({ok:true});
 });
 app.get("/api/admin/products/:id", async (c) => {
   const [product, variants, media, packaging] = await c.env.DB.batch([
@@ -398,7 +504,9 @@ app.patch("/api/admin/inventory/bulk", async (c) => {
 });
 app.post("/api/admin/uploads", async (c) => {
   const form = await c.req.formData(); const file = form.get("file");
-  if (!(file instanceof File) || (!file.type.startsWith("image/") && file.type !== "application/pdf") || file.size > 12_000_000) throw new HTTPError(400, "Upload an image or PDF under 12 MB.");
+  const allowed = file instanceof File && (file.type.startsWith("image/") || file.type.startsWith("video/") || file.type === "application/pdf" || file.type.startsWith("text/") || file.type.includes("document"));
+  const maxSize = file instanceof File && file.type.startsWith("video/") ? 50_000_000 : 12_000_000;
+  if (!allowed || file.size > maxSize) throw new HTTPError(400, "Upload an image, video or document within the allowed size.");
   const folder = String(form.get("folder") || "general").replace(/[^a-z0-9_-]/gi, "").slice(0, 40) || "general";
   const extension = file.name.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || (file.type === "application/pdf" ? "pdf" : "webp");
   const key = `${folder}/${crypto.randomUUID()}.${extension}`;
@@ -407,6 +515,19 @@ app.post("/api/admin/uploads", async (c) => {
   await c.env.DB.prepare("INSERT INTO media_assets(id,key,url,file_name,folder,mime_type,size_bytes,alt_text,created_by) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)").bind(mediaId,key,url,file.name,folder,file.type,file.size,String(form.get("altText")||"")||null,c.get("admin").id).run();
   await audit(c, "uploaded", "media", mediaId, { fileName: file.name, key });
   return c.json({ id: mediaId, key, url, fileName: file.name }, 201);
+});
+app.put("/api/admin/media/:id/replace", async (c) => {
+  const current=await c.env.DB.prepare("SELECT * FROM media_assets WHERE id=?1").bind(c.req.param("id")).first();
+  if(!current)throw new HTTPError(404,"Media not found.");
+  const form=await c.req.formData(); const file=form.get("file");
+  if(!(file instanceof File)||file.size>50_000_000)throw new HTTPError(400,"Choose a replacement under 50 MB.");
+  const extension=file.name.split(".").pop()?.replace(/[^a-z0-9]/gi,"")||"bin"; const key=`${current.folder}/${crypto.randomUUID()}.${extension}`;
+  await c.env.MEDIA.put(key,file.stream(),{httpMetadata:{contentType:file.type,cacheControl:"public,max-age=31536000,immutable"}});
+  const url=`${new URL(c.req.url).origin}/api/media/${key}`;
+  await c.env.DB.prepare("UPDATE media_assets SET key=?1,url=?2,file_name=?3,mime_type=?4,size_bytes=?5,updated_at=CURRENT_TIMESTAMP WHERE id=?6").bind(key,url,file.name,file.type,file.size,current.id).run();
+  await c.env.MEDIA.delete(current.key);
+  await audit(c,"replaced","media",current.id,{oldKey:current.key,key});
+  return c.json({id:current.id,key,url,fileName:file.name});
 });
 app.delete("/api/admin/media/:id", async (c) => {
   const media = await c.env.DB.prepare("SELECT key FROM media_assets WHERE id=?1").bind(c.req.param("id")).first();
@@ -450,11 +571,16 @@ app.put("/api/admin/permissions/:userId", async (c) => {
 export default {
   fetch: app.fetch,
   async scheduled(event, env) {
+    await env.DB.batch([
+      env.DB.prepare("UPDATE cms_entries SET status='published',updated_at=CURRENT_TIMESTAMP WHERE status='scheduled' AND publish_at<=CURRENT_TIMESTAMP"),
+      env.DB.prepare("UPDATE cms_entries SET status='archived',updated_at=CURRENT_TIMESTAMP WHERE status='published' AND expires_at IS NOT NULL AND expires_at<=CURRENT_TIMESTAMP"),
+    ]);
     if (!env.NOTIFICATION_WEBHOOK) return;
     const queued = (await env.DB.prepare("SELECT * FROM notifications WHERE status='queued' ORDER BY created_at LIMIT 50").all()).results;
     for (const notification of queued) {
       try {
-        const response = await fetch(env.NOTIFICATION_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.NOTIFICATION_WEBHOOK_SECRET || ""}` }, body: notification.payload_json });
+        const template = await env.DB.prepare("SELECT template_key,subject,preheader,html_content,text_content FROM email_templates WHERE template_key=?1 AND enabled=1").bind(notification.event_type).first();
+        const response = await fetch(env.NOTIFICATION_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.NOTIFICATION_WEBHOOK_SECRET || ""}` }, body: json({ ...JSON.parse(notification.payload_json), template }) });
         await env.DB.prepare("UPDATE notifications SET status=?1,sent_at=CASE WHEN ?1='sent' THEN CURRENT_TIMESTAMP ELSE sent_at END WHERE id=?2").bind(response.ok ? "sent" : "failed", notification.id).run();
       } catch {
         await env.DB.prepare("UPDATE notifications SET status='failed' WHERE id=?1").bind(notification.id).run();

@@ -1,5 +1,5 @@
 import {
-  Activity, BarChart3, Boxes, ChevronDown, ClipboardList, FileSearch, Globe2, Home,
+  Activity, BarChart3, Boxes, ChevronDown, ClipboardList, FileSearch, FileText, Globe2, Home,
   Image, LayoutDashboard, LogOut, Menu, MessageSquare, Moon, Package, Plus, Search,
   Settings, ShoppingBasket, Tags, TicketPercent, Trash2, Upload, Users, X,
 } from "lucide-react";
@@ -7,11 +7,12 @@ import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 import { apiFetch } from "../services/api";
+import ContentWorkspace from "../components/admin/ContentWorkspace";
 
 const navigation = [
   ["Overview", [["dashboard", LayoutDashboard, "Dashboard"], ["analytics", BarChart3, "Analytics"]]],
   ["Commerce", [["products", Package, "Products"], ["categories", Tags, "Categories"], ["inventory", Boxes, "Inventory"], ["orders", ClipboardList, "Orders"], ["customers", Users, "Customers"], ["coupons", TicketPercent, "Coupons"], ["reviews", MessageSquare, "Reviews"]]],
-  ["Content", [["media", Image, "Media library"], ["banners", Image, "Banners"], ["homepage", Home, "Homepage"], ["digital", Globe2, "Digital platform"], ["seo", FileSearch, "SEO"]]],
+  ["Content", [["content", FileText, "Content CMS"], ["media", Image, "Media library"], ["banners", Image, "Banners"], ["homepage", Home, "Homepage"], ["digital", Globe2, "Digital platform"], ["seo", FileSearch, "SEO"]]],
   ["System", [["settings", Settings, "Site settings"], ["activity", Activity, "Activity logs"]]],
 ];
 const allSections = navigation.flatMap(([, items]) => items);
@@ -75,9 +76,9 @@ const defaults = {
 };
 const editable = new Set(["products", "categories", "coupons", "banners", "digital", "seo", "settings", "homepage"]);
 
-export default function AdminPage() {
+export default function AdminPage({ initialModule = "dashboard" }) {
   const { user, loading, signInEmail, signInGoogle, signOutUser } = useAuth();
-  const [active, setActive] = useState("dashboard");
+  const [active, setActive] = useState(initialModule);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -155,7 +156,8 @@ export default function AdminPage() {
           {busy && data === null ? <div className="admin-loading"><span className="admin-spinner" /> Loading workspace…</div> : null}
           {active === "dashboard" && data ? <Dashboard data={data} onNavigate={selectModule} /> : null}
           {active === "media" ? <MediaLibrary rows={filtered} onReload={load} setError={setError} setNotice={setNotice} /> : null}
-          {active !== "dashboard" && active !== "media" && Array.isArray(data) ? <DataTable module={active} rows={filtered} onEdit={openEditor} onDelete={remove} onReload={load} setError={setError} setNotice={setNotice} /> : null}
+          {active === "content" && Array.isArray(data) ? <ContentWorkspace rows={filtered} onReload={load} setError={setError} setNotice={setNotice} /> : null}
+          {active !== "dashboard" && active !== "media" && active !== "content" && Array.isArray(data) ? <DataTable module={active} rows={filtered} onEdit={openEditor} onDelete={remove} onReload={load} setError={setError} setNotice={setNotice} /> : null}
         </div>
       </main>
       {editor ? <Editor module={active} value={editor} onClose={() => setEditor(null)} onSaved={async () => { setEditor(null); setNotice("Changes saved"); await load(); }} setError={setError} /> : null}
@@ -237,9 +239,12 @@ function Field({ field, form, update, disabled = false }) {
 
 function MediaLibrary({ rows, onReload, setError, setNotice }) {
   const inputRef = useRef(null); const [uploading, setUploading] = useState(false); const [folder, setFolder] = useState("general");
-  const upload = async (event) => { const files = [...event.target.files]; if (!files.length) return; setUploading(true); try { for (const file of files) { const body = new FormData(); body.append("file", file); body.append("folder", folder); await apiFetch("/api/admin/uploads", { method: "POST", body }); } setNotice(`${files.length} asset${files.length > 1 ? "s" : ""} uploaded`); await onReload(); } catch (reason) { setError(reason.message); } finally { setUploading(false); event.target.value = ""; } };
+  const upload = async (event) => { const files = [...event.target.files]; if (!files.length) return; setUploading(true); try { for (const file of files) { const prepared = await optimizeImage(file); const body = new FormData(); body.append("file", prepared); body.append("folder", folder); await apiFetch("/api/admin/uploads", { method: "POST", body }); } setNotice(`${files.length} asset${files.length > 1 ? "s" : ""} uploaded and optimized`); await onReload(); } catch (reason) { setError(reason.message); } finally { setUploading(false); event.target.value = ""; } };
   const remove = async (asset) => { if (!window.confirm(`Delete ${asset.file_name}? This cannot be undone.`)) return; try { await apiFetch(`/api/admin/media/${asset.id}`, { method: "DELETE" }); setNotice("Asset deleted"); await onReload(); } catch (reason) { setError(reason.message); } };
-  return <><div className="admin-media-toolbar"><label>Folder<select value={folder} onChange={(event) => setFolder(event.target.value)}><option>general</option><option>products</option><option>categories</option><option>banners</option><option>packaging</option></select></label><button type="button" className="admin-primary" disabled={uploading} onClick={() => inputRef.current?.click()}><Upload /> {uploading ? "Uploading…" : "Upload media"}</button><input ref={inputRef} type="file" hidden multiple accept="image/*,.pdf" onChange={upload} /></div>{rows.length ? <div className="admin-media-grid">{rows.map((asset) => <article key={asset.id}>{asset.mime_type.startsWith("image/") ? <img src={asset.url} alt={asset.alt_text || ""} loading="lazy" /> : <div className="admin-pdf">PDF</div>}<div><strong title={asset.file_name}>{asset.file_name}</strong><small>{asset.folder} · {(asset.size_bytes / 1024).toFixed(0)} KB</small></div><button type="button" onClick={() => remove(asset)} aria-label="Delete asset"><Trash2 /></button></article>)}</div> : <section className="admin-panel"><Empty /></section>}</>;
+  const putReplacement=async(asset,file,message)=>{setUploading(true);try{const prepared=await optimizeImage(file);const body=new FormData();body.append("file",prepared);await apiFetch(`/api/admin/media/${asset.id}/replace`,{method:"PUT",body});setNotice(message);await onReload();}catch(reason){setError(reason.message);}finally{setUploading(false);}};
+  const replace = (asset) => { const picker=document.createElement("input"); picker.type="file"; picker.accept="image/*,video/*,.pdf,.doc,.docx,.txt"; picker.onchange=()=>{const file=picker.files?.[0];if(file)putReplacement(asset,file,"Asset replaced");};picker.click();};
+  const crop=async(asset)=>{const ratio=window.prompt("Crop aspect ratio: 1:1, 4:3 or 16:9","1:1");if(!ratio)return;try{const file=await cropImage(asset.url,ratio,asset.file_name);await putReplacement(asset,file,"Image cropped and saved as WebP");}catch(reason){setError(reason.message);}};
+  return <><div className="admin-media-toolbar"><label>Folder<select value={folder} onChange={(event) => setFolder(event.target.value)}><option>general</option><option>products</option><option>categories</option><option>banners</option><option>packaging</option><option>videos</option><option>documents</option></select></label><button type="button" className="admin-primary" disabled={uploading} onClick={() => inputRef.current?.click()}><Upload /> {uploading ? "Uploading…" : "Upload media"}</button><input ref={inputRef} type="file" hidden multiple accept="image/*,video/*,.pdf,.doc,.docx,.txt" onChange={upload} /></div>{rows.length ? <div className="admin-media-grid">{rows.map((asset) => <article key={asset.id}>{asset.mime_type.startsWith("image/") ? <img src={asset.url} alt={asset.alt_text || ""} loading="lazy" /> : asset.mime_type.startsWith("video/") ? <video src={asset.url} muted controls preload="metadata" /> : <div className="admin-pdf">{asset.mime_type==="application/pdf"?"PDF":"DOC"}</div>}<div><strong title={asset.file_name}>{asset.file_name}</strong><small>{asset.folder} · {(asset.size_bytes / 1024).toFixed(0)} KB</small><span><button type="button" onClick={()=>replace(asset)}>Replace</button>{asset.mime_type.startsWith("image/")?<button type="button" onClick={()=>crop(asset)}>Crop</button>:null}</span></div><button type="button" onClick={() => remove(asset)} aria-label="Delete asset"><Trash2 /></button></article>)}</div> : <section className="admin-panel"><Empty /></section>}</>;
 }
 
 function Status({ value }) { return <span className={`admin-status is-${value}`}>{labelFor(String(value))}</span>; }
@@ -260,4 +265,24 @@ function normalizeRow(module, row) {
   for (const [key, value] of Object.entries(row)) result[toCamel(key)] = ["active", "enabled", "featured", "best_seller", "new_arrival", "homepage_visible", "navigation_visible"].includes(key) ? Boolean(value) : value;
   if (module === "products" && row.variants) result.variants = row.variants.map((variant) => normalizeRow("variant", variant));
   return result;
+}
+async function optimizeImage(file) {
+  if (!file.type.startsWith("image/") || file.type === "image/svg+xml" || file.type === "image/webp") return file;
+  const bitmap = await createImageBitmap(file); const scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas"); canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height); bitmap.close();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", .82));
+  return blob ? new File([blob], `${file.name.replace(/\.[^.]+$/, "")}.webp`, { type: "image/webp" }) : file;
+}
+async function cropImage(url, ratioText, fileName) {
+  const ratios={"1:1":1,"4:3":4/3,"16:9":16/9}; const ratio=ratios[ratioText];
+  if(!ratio)throw new Error("Use one of these crop ratios: 1:1, 4:3 or 16:9.");
+  const image=new window.Image(); image.crossOrigin="anonymous";
+  await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(new Error("The image could not be loaded for cropping."));image.src=url;});
+  let width=image.naturalWidth;let height=Math.round(width/ratio);if(height>image.naturalHeight){height=image.naturalHeight;width=Math.round(height*ratio);}
+  const sourceX=Math.round((image.naturalWidth-width)/2);const sourceY=Math.round((image.naturalHeight-height)/2);
+  const scale=Math.min(1,2400/Math.max(width,height));const canvas=document.createElement("canvas");canvas.width=Math.round(width*scale);canvas.height=Math.round(height*scale);
+  canvas.getContext("2d").drawImage(image,sourceX,sourceY,width,height,0,0,canvas.width,canvas.height);
+  const blob=await new Promise((resolve)=>canvas.toBlob(resolve,"image/webp",.84));if(!blob)throw new Error("Image crop failed.");
+  return new File([blob],`${fileName.replace(/\.[^.]+$/,"")}-${ratioText.replace(":","x")}.webp`,{type:"image/webp"});
 }

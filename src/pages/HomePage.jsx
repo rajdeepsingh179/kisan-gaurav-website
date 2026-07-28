@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import ProductCard from "../components/storefront/ProductCard";
 import { useCatalog } from "../contexts/CatalogContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
+import { useSiteContent } from "../contexts/SiteContentContext";
 
 const categoryImages = {
   makhana: "/images/storefront/classic-makhana-card.webp",
@@ -16,33 +17,47 @@ const categoryImages = {
 
 export default function HomePage() {
   const { categories, products } = useCatalog();
+  const { get } = useSiteContent();
+  const hero = get("home", "hero")?.content || {};
+  const categorySection = get("home", "featured-categories")?.content || {};
+  const featuredSection = get("home", "featured-products")?.content || {};
+  const why = get("home", "why-choose-us")?.content || {};
+  const marquee = get("home", "marquee")?.content || {};
+  const statistics = get("home", "statistics")?.content || {};
+  const testimonials = get("home", "testimonials")?.content || {};
+  const partners = get("home", "partner-logos")?.content || {};
+  const gallery = get("home", "gallery")?.content || {};
+  const newsletter = get("home", "newsletter")?.content || {};
+  const gifting = get("home", "gifting")?.content || {};
+  const best = products.filter((item) => item.best_seller).slice(0, 8);
+  const newest = products.filter((item) => item.new_arrival).slice(0, 8);
   useDocumentTitle("Premium Dry Fruits & Thoughtful Gifting");
   const featured = products.filter((item) => item.featured).slice(0, 8);
 
   return (
     <>
       <section className="store-hero">
-        <img className="store-hero__image" src="/images/storefront/hero-2000.webp" width="2000" height="1600" alt="Kisan Gaurav almond, cashew and makhana pantry packs" fetchPriority="high" />
+        {hero.backgroundImage ? <img className="store-hero__image" src={hero.backgroundImage} width="2000" height="1600" alt={hero.heading || ""} fetchPriority="high" /> : null}
         <div className="store-hero__shade" />
         <div className="store-hero__copy">
-          <p className="eyebrow eyebrow--light">Premium foods · Thoughtfully sourced</p>
-          <h1>Goodness,<br /><em>grown with pride.</em></h1>
-          <p>Exceptional dry fruits, mindful blends and gifts made to honour the goodness of India’s harvests.</p>
+          <p className="eyebrow eyebrow--light">{hero.eyebrow}</p>
+          <h1>{hero.heading}</h1>
+          <p>{hero.subheading}</p>
           <div className="hero-actions">
-            <Link className="button button--cream" to="/shop">Explore the collection <ArrowRight size={17} /></Link>
-            <Link className="text-link text-link--light" to="/about">Our story</Link>
+            {hero.primaryCta?.url ? <Link className="button button--cream" to={hero.primaryCta.url}>{hero.primaryCta.label} <ArrowRight size={17} /></Link> : null}
+            {hero.secondaryCta?.url ? <Link className="text-link text-link--light" to={hero.secondaryCta.url}>{hero.secondaryCta.label}</Link> : null}
           </div>
         </div>
-        <div className="store-hero__stamp"><Leaf size={18} /><span>Rooted in<br />Indian goodness</span></div>
+        {hero.badge ? <div className="store-hero__stamp"><Leaf size={18} /><span>{hero.badge}</span></div> : null}
       </section>
-      <section className="marquee" aria-label="Brand promises"><div><span>Thoughtfully sourced</span><i>✦</i><span>Premium pantry staples</span><i>✦</i><span>Made for modern rituals</span><i>✦</i><span>Gift wellness beautifully</span></div></section>
+      {(marquee.items || []).length ? <section className="marquee" aria-label={get("home","marquee")?.title}><div>{marquee.items.map((item)=><span key={item}>{item}<i>✦</i></span>)}</div></section> : null}
       <section className="home-section home-section--intro">
         <div className="section-heading section-heading--split">
-          <div><p className="eyebrow">Shop by collection</p><h2>A pantry of<br /><em>considered choices.</em></h2></div>
-          <p>From a crisp afternoon handful to a generous festive gesture, find naturally satisfying food for every kind of moment.</p>
+          <div><p className="eyebrow">{categorySection.eyebrow}</p><h2>{categorySection.heading}</h2></div>
+          <p>{categorySection.description}</p>
         </div>
         <div className="category-grid">
-          {categories.map((category, index) => (
+          {categories.filter((category)=>category.featured).map((category, index) => (
             <Link className="category-card" key={category.id} to={`/category/${category.id}`}>
               <img src={category.thumbnail_url || category.heroImage || categoryImages[category.id]} width="1200" height="1200" loading="lazy" decoding="async" alt="" />
               <div className="category-card__overlay" />
@@ -54,29 +69,30 @@ export default function HomePage() {
       </section>
       <section className="home-section home-section--green">
         <div className="section-heading section-heading--split section-heading--light">
-          <div><p className="eyebrow eyebrow--light">The edit</p><h2>Made for your<br /><em>everyday rituals.</em></h2></div>
+          <div><p className="eyebrow eyebrow--light">{featuredSection.eyebrow}</p><h2>{featuredSection.heading}</h2></div>
           <Link className="text-link text-link--light" to="/shop">View all products <ArrowRight size={16} /></Link>
         </div>
         <div className="product-grid">{featured.map((item) => <ProductCard item={item} key={item.slug} />)}</div>
       </section>
       <section className="origin-section">
-        <div className="origin-section__mark">किसान</div>
+        <div className="origin-section__mark">{why.mark}</div>
         <div className="origin-section__copy">
-          <p className="eyebrow">Why Kisan Gaurav</p><h2>Because every good thing<br /><em>begins at the source.</em></h2>
-          <p>Our name means “the pride of the farmer.” It reminds us to look beyond the pack—to the soil, skill and patient care behind every ingredient.</p>
-          <Link className="text-link" to="/about">Read our story <ArrowRight size={16} /></Link>
+          <p className="eyebrow">{why.eyebrow}</p><h2>{why.heading}</h2>
+          <p>{why.body}</p>
+          {why.cta?.url?<Link className="text-link" to={why.cta.url}>{why.cta.label} <ArrowRight size={16} /></Link>:null}
         </div>
         <div className="promise-list">
-          <div><Leaf /><span><strong>Thoughtfully sourced</strong><small>Ingredients chosen with care</small></span></div>
-          <div><ShieldCheck /><span><strong>Quality selected</strong><small>Clean taste and natural texture</small></span></div>
-          <div><PackageCheck /><span><strong>Freshness considered</strong><small>Resealable premium packaging</small></span></div>
-          <div><Sparkles /><span><strong>Beautifully giftable</strong><small>Quiet luxury for every occasion</small></span></div>
+          {(why.items || []).map((item, index) => { const Icon = [Leaf, ShieldCheck, PackageCheck, Sparkles][index % 4]; return <div key={item.title}><Icon /><span><strong>{item.title}</strong><small>{item.text}</small></span></div>; })}
         </div>
       </section>
-      <section className="gifting-banner">
-        <div><p className="eyebrow eyebrow--light">The art of thoughtful gifting</p><h2>Give something<br /><em>genuinely good.</em></h2><p>Curated dry-fruit collections for families, festivities, weddings and meaningful corporate moments.</p><Link className="button button--cream" to="/category/gifts">Explore gift packs <ArrowRight size={17} /></Link></div>
-        <img src="/images/storefront/premium-gift-box-detail.webp" width="1800" height="1800" loading="lazy" alt="Premium Kisan Gaurav dry fruit gift box" />
-      </section>
+      {best.length ? <section className="home-section"><div className="section-heading"><p className="eyebrow">{get("home","best-sellers")?.title}</p><h2>{get("home","best-sellers")?.content.heading}</h2></div><div className="product-grid">{best.map((item)=><ProductCard item={item} key={item.slug}/>)}</div></section>:null}
+      {newest.length ? <section className="home-section home-section--green"><div className="section-heading section-heading--light"><p className="eyebrow eyebrow--light">{get("home","new-arrivals")?.title}</p><h2>{get("home","new-arrivals")?.content.heading}</h2></div><div className="product-grid">{newest.map((item)=><ProductCard item={item} key={item.slug}/>)}</div></section>:null}
+      {(statistics.items||[]).length?<section className="cms-statistics">{statistics.items.map((item)=><div key={item.label}><strong>{item.value}</strong><span>{item.label}</span></div>)}</section>:null}
+      {(testimonials.items||[]).length?<section className="home-section"><div className="section-heading"><h2>{get("home","testimonials")?.title}</h2></div><div className="cms-testimonials">{testimonials.items.map((item)=><blockquote key={`${item.name}-${item.quote}`}><p>{item.quote}</p><footer>{item.name}</footer></blockquote>)}</div></section>:null}
+      {(partners.items||[]).length?<section className="cms-partners" aria-label={get("home","partner-logos")?.title}>{partners.items.map((item)=><img src={item.image||item.url} alt={item.name||""} key={item.image||item.url}/>)}</section>:null}
+      {(gallery.items||[]).length?<section className="cms-home-gallery">{gallery.items.map((item)=><img src={item.image||item.url||item} alt={item.alt||""} key={item.image||item.url||item}/>)}</section>:null}
+      {gifting.heading?<section className="gifting-banner"><div><p className="eyebrow eyebrow--light">{gifting.eyebrow}</p><h2>{gifting.heading}</h2><p>{gifting.body}</p>{gifting.cta?.url?<Link className="button button--cream" to={gifting.cta.url}>{gifting.cta.label}<ArrowRight size={17}/></Link>:null}</div>{gifting.image?<img src={gifting.image} width="1800" height="1800" loading="lazy" alt={gifting.heading}/>:null}</section>:null}
+      {newsletter.heading?<section className="cms-newsletter"><div><p className="eyebrow">{get("home","newsletter")?.title}</p><h2>{newsletter.heading}</h2><p>{newsletter.body}</p></div><form onSubmit={(event)=>event.preventDefault()}><label><span className="sr-only">Email address</span><input type="email" placeholder={newsletter.placeholder} required/></label><button type="submit">{newsletter.buttonLabel}</button></form></section>:null}
     </>
   );
 }

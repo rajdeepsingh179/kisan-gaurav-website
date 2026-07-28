@@ -5,9 +5,12 @@ import { useSearchParams } from "react-router-dom";
 import ProductCard from "../components/storefront/ProductCard";
 import { useCatalog } from "../contexts/CatalogContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
+import { useSiteContent } from "../contexts/SiteContentContext";
 
 export default function ShopPage() {
   const { categories, products } = useCatalog();
+  const { get } = useSiteContent();
+  const searchManagement = get("search","settings")?.content || {};
   const [params] = useSearchParams();
   const initialCategory = categories.some((item) => item.id === params.get("category")) ? params.get("category") : "all";
   const [active, setActive] = useState(initialCategory);
@@ -20,7 +23,10 @@ export default function ShopPage() {
     const matchesCategory = active === "all" || item.category === active;
     const searchText = `${item.name} ${item.ingredients} ${item.note}`.toLowerCase();
     return matchesCategory && item.price <= maxPrice && searchText.includes(query.trim().toLowerCase());
-  }), [active, maxPrice, products, query]);
+  }).sort((left,right)=>{
+    const popular=searchManagement.popularProductIds||[]; const leftIndex=popular.findIndex((value)=>value===left.id||value===left.slug);const rightIndex=popular.findIndex((value)=>value===right.id||value===right.slug);
+    return (leftIndex<0?999:leftIndex)-(rightIndex<0?999:rightIndex);
+  }), [active, maxPrice, products, query, searchManagement.popularProductIds]);
 
   const clearFilters = () => {
     setActive("all");
@@ -46,6 +52,7 @@ export default function ShopPage() {
           <button className="mobile-filter-button" type="button" aria-controls="product-filters" aria-expanded={mobileFilters} onClick={() => setMobileFilters((value) => !value)}><SlidersHorizontal size={17} aria-hidden="true" /> Filters</button>
           <span aria-live="polite">{visible.length} products</span>
         </div>
+        {!query && (searchManagement.trendingSearches || []).length ? <div className="cms-search-suggestions"><span>Trending</span>{searchManagement.trendingSearches.map((term)=><button type="button" onClick={()=>setQuery(term)} key={term}>{term}</button>)}</div> : null}
         <div className="catalog-layout">
           <aside id="product-filters" className={`filter-panel ${mobileFilters ? "is-open" : ""}`} aria-label="Product filters">
             <div className="filter-panel__heading"><strong>Filters</strong><button type="button" onClick={clearFilters}>Clear all</button></div>

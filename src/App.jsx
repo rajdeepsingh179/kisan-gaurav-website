@@ -22,6 +22,10 @@ const AdminPage = lazy(() => import("./pages/AdminPage"));
 const PasswordResetPage = lazy(() => import("./pages/PasswordResetPage"));
 const KisanDigitalPage = lazy(() => import("./pages/KisanDigitalPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
+const FaqPage = lazy(() => import("./pages/FaqPage"));
+const LegalPage = lazy(() => import("./pages/LegalPage"));
+const BlogPage = lazy(() => import("./pages/BlogPage"));
+const BlogArticlePage = lazy(() => import("./pages/BlogArticlePage"));
 
 export default function App() {
   return (
@@ -30,6 +34,7 @@ export default function App() {
         <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="admin" element={<AdminPage />} />
+            <Route path="admin/content" element={<AdminPage initialModule="content" />} />
             <Route element={<WebsiteLayout />}>
               <Route index element={<HomePage />} />
               <Route path="shop" element={<ShopPage />} />
@@ -40,6 +45,10 @@ export default function App() {
               <Route path="kisan-digital" element={<KisanDigitalPage />} />
               <Route path="about" element={<AboutPage />} />
               <Route path="contact" element={<ContactPage />} />
+              <Route path="faq" element={<FaqPage />} />
+              <Route path="policies/:slug" element={<LegalPage />} />
+              <Route path="blog" element={<BlogPage />} />
+              <Route path="blog/:slug" element={<BlogArticlePage />} />
               <Route path="cart" element={<CartPage />} />
               <Route path="checkout" element={<CheckoutPage />} />
               <Route path="account" element={<AccountPage />} />

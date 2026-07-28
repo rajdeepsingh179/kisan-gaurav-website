@@ -4,12 +4,15 @@ import { Link, Navigate, useParams } from "react-router-dom";
 import ProductCard from "../components/storefront/ProductCard";
 import { useCatalog } from "../contexts/CatalogContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
+import { useSiteContent } from "../contexts/SiteContentContext";
 
 export default function CategoryPage() {
   const { categoryById, products, loading } = useCatalog();
+  const { get } = useSiteContent();
   const { categoryId } = useParams();
   const category = categoryById[categoryId];
-  useDocumentTitle(category?.name || "Category", category?.description);
+  const managed = get("category_content", categoryId)?.content || {};
+  useDocumentTitle(managed.name || category?.name || "Category", managed.description || category?.description);
   if (loading) return <div className="commerce-empty">Loading collection…</div>;
   if (!category) return <Navigate replace to="/categories" />;
   const items = products.filter((item) => item.category === category.id);
@@ -19,11 +22,11 @@ export default function CategoryPage() {
       <section className="category-page-hero">
         <div>
           <Link to="/categories"><ArrowLeft size={15} /> All categories</Link>
-          <p className="eyebrow">{category.eyebrow}</p>
-          <h1>{category.name}</h1>
-          <p>{category.description}</p>
+          <p className="eyebrow">{managed.eyebrow || category.eyebrow}</p>
+          <h1>{managed.name || category.name}</h1>
+          <p>{managed.description || category.description}</p>
         </div>
-        <img src={category.heroImage} width="2000" height="1600" alt={`${category.name} collection`} decoding="async" fetchPriority="high" />
+        <img src={managed.heroBanner || category.heroImage} width="2000" height="1600" alt={`${managed.name || category.name} collection`} decoding="async" fetchPriority="high" />
       </section>
       <section className="catalog-section">
         <div className="section-heading section-heading--split">

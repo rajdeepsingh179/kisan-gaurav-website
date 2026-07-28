@@ -5,6 +5,7 @@ import { Link, NavLink } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { useCatalog } from "../contexts/CatalogContext";
 import { useCommerce } from "../contexts/CommerceContext";
+import { useSiteContent } from "../contexts/SiteContentContext";
 import BrandLogo from "./brand/BrandLogo";
 import { SignInModal, SignUpModal } from "./auth";
 
@@ -18,6 +19,10 @@ const digitalSoon = ["Crop Advisory", "Disease Detection", "AI Assistant"];
 
 export default function Navbar() {
   const { categories } = useCatalog();
+  const { get, menu } = useSiteContent();
+  const announcement = get("home", "announcement")?.content;
+  const mainMenu = menu("main");
+  const labelFor = (url, fallback) => mainMenu.find((item) => item.url === url)?.label || fallback;
   const [open, setOpen] = useState(false);
   const [accordion, setAccordion] = useState(null);
   const [authModal, setAuthModal] = useState(null);
@@ -27,7 +32,7 @@ export default function Navbar() {
   const { cartCount, setCartOpen } = useCommerce();
   const buttonRef = useRef(null);
   const navRef = useRef(null);
-  const closeMenu = useCallback(() => { setOpen(false); setAccordion(null); }, []);
+  const closeMenu = useCallback(() => { setOpen(false); setAccordion(null); }, [setOpen, setAccordion]);
 
   useEffect(() => {
     const media = window.matchMedia("(min-width: 1101px)");
@@ -65,18 +70,18 @@ export default function Navbar() {
 
   return (
     <>
-      <div className="announcement">Complimentary delivery on eligible orders · Online ordering coming soon</div>
+      {announcement?.text ? <div className="announcement">{announcement.text}{announcement.linkUrl ? <> · <Link to={announcement.linkUrl}>{announcement.linkLabel}</Link></> : null}</div> : null}
       <header ref={navRef} className="store-nav">
         <Link className="store-nav__brand" to="/" onClick={closeMenu}><BrandLogo showTagline /></Link>
         <nav id="primary-navigation" className={`store-nav__links ${open ? "is-open" : ""}`} aria-label="Primary navigation">
-          <NavLink end to="/" onClick={closeMenu}>Home</NavLink>
-          <NavLink to="/shop" onClick={closeMenu}>Shop</NavLink>
+          <NavLink end to="/" onClick={closeMenu}>{labelFor("/", "Home")}</NavLink>
+          <NavLink to="/shop" onClick={closeMenu}>{labelFor("/shop", "Shop")}</NavLink>
           <div
             className={`nav-group ${accordion === "categories" ? "is-open" : ""} ${suppressedMenu === "categories" || suppressedMenu === "all" ? "is-suppressed" : ""}`}
             onMouseEnter={() => { if (isDesktop) setSuppressedMenu(null); }}
             onMouseLeave={() => { if (isDesktop) { setAccordion(null); setSuppressedMenu(null); } }}
           >
-            <button type="button" onClick={() => { if (!isDesktop) setAccordion((value) => value === "categories" ? null : "categories"); }} aria-expanded={isDesktop ? undefined : accordion === "categories"} aria-haspopup="true">Categories <ChevronDown size={14} aria-hidden="true" /></button>
+            <button type="button" onClick={() => { if (!isDesktop) setAccordion((value) => value === "categories" ? null : "categories"); }} aria-expanded={isDesktop ? undefined : accordion === "categories"} aria-haspopup="true">{labelFor("/categories", "Categories")} <ChevronDown size={14} aria-hidden="true" /></button>
             <div className="nav-dropdown nav-dropdown--categories">
               <div><span className="nav-dropdown__eyebrow">Shop by category</span><strong>Good food for every ritual</strong><Link to="/categories" onClick={() => selectDestination("categories")}>View all collections</Link></div>
               <div className="nav-dropdown__links">
@@ -85,7 +90,7 @@ export default function Navbar() {
             </div>
           </div>
           <div className={`nav-group ${accordion === "digital" ? "is-open" : ""} ${suppressedMenu === "digital" || suppressedMenu === "all" ? "is-suppressed" : ""}`} onMouseEnter={() => { if (isDesktop) setSuppressedMenu(null); }} onMouseLeave={() => { if (isDesktop) { setAccordion(null); setSuppressedMenu(null); } }}>
-            <button type="button" onClick={() => { if (!isDesktop) setAccordion((value) => value === "digital" ? null : "digital"); }} aria-expanded={isDesktop ? undefined : accordion === "digital"} aria-haspopup="true">Kisan Gaurav Digital <ChevronDown size={14} aria-hidden="true" /></button>
+            <button type="button" onClick={() => { if (!isDesktop) setAccordion((value) => value === "digital" ? null : "digital"); }} aria-expanded={isDesktop ? undefined : accordion === "digital"} aria-haspopup="true">{labelFor("/kisan-digital", "Kisan Gaurav Digital")} <ChevronDown size={14} aria-hidden="true" /></button>
             <div className="nav-dropdown nav-dropdown--digital">
               <div><span className="nav-dropdown__eyebrow">Farmer-first digital tools</span><strong>Knowledge for better decisions</strong><Link to="/kisan-digital" onClick={() => selectDestination("digital")}>Explore digital platform</Link></div>
               <div className="nav-dropdown__links">
@@ -95,9 +100,7 @@ export default function Navbar() {
               </div>
             </div>
           </div>
-          <NavLink to="/features" onClick={closeMenu}>Features</NavLink>
-          <NavLink to="/about" onClick={closeMenu}>About</NavLink>
-          <NavLink to="/contact" onClick={closeMenu}>Contact</NavLink>
+          {mainMenu.filter((item) => !["/","/shop","/categories","/kisan-digital"].includes(item.url) && !item.parent_id).map((item) => <NavLink key={item.id} to={item.url} onClick={closeMenu}>{item.label}</NavLink>)}
           <button className="mobile-signin" onClick={() => { setAuthModal("signIn"); closeMenu(); }} type="button">Sign In</button>
         </nav>
         <div className="store-nav__actions">

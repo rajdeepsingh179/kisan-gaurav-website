@@ -1,18 +1,24 @@
-import { ArrowUpRight, Camera, Mail } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import BrandLogo from "./brand/BrandLogo";
+import { useSiteContent } from "../contexts/SiteContentContext";
 
 export default function Footer() {
+  const { get, menu } = useSiteContent();
+  const footer = get("footer", "main")?.content || {};
+  const quick = menu("footer_quick");
+  const support = menu("footer_support");
+  const policies = menu("footer_policies");
   return (
     <footer className="store-footer">
       <div className="store-footer__top">
-        <div><BrandLogo showTagline /><p>Premium dry fruits, mindful snacking and thoughtful gifts—rooted in the pride of India’s harvests.</p></div>
-        <div><h3>Explore</h3><Link to="/shop">Shop all</Link><Link to="/categories">Categories</Link><Link to="/categories#gifts">Gift packs</Link><Link to="/kisan-digital">Kisan Gaurav Digital</Link></div>
-        <div><h3>Company</h3><Link to="/about">Our story</Link><Link to="/contact">Contact</Link><Link to="/contact">Retail enquiries</Link><Link to="/contact">Corporate gifting</Link></div>
-        <div><h3>Stay close</h3><p>New collections, nourishing ideas and gifting notes.</p><a href="mailto:hello@kisangaurav.com"><Mail size={16} aria-hidden="true" /> hello@kisangaurav.com</a><span><Camera size={16} aria-hidden="true" /> Instagram <ArrowUpRight size={14} aria-hidden="true" /></span></div>
+        <div><BrandLogo showTagline /><p>{footer.description}</p></div>
+        <div><h3>{footer.quickLinksTitle}</h3>{quick.map((item)=><Link key={item.id} to={item.url}>{item.label}</Link>)}</div>
+        <div><h3>{footer.supportLinksTitle}</h3>{support.map((item)=><Link key={item.id} to={item.url}>{item.label}</Link>)}</div>
+        <div><h3>{footer.newsletterTitle}</h3><p>{footer.newsletterText}</p>{(footer.socialLinks || []).map((item)=><a href={item.url} key={item.label}>{item.label} <ArrowUpRight size={14}/></a>)}</div>
       </div>
-      <div className="store-footer__bottom"><span>© {new Date().getFullYear()} Kisan Gaurav. All rights reserved.</span><span>Made with respect for the source.</span></div>
+      <div className="store-footer__bottom"><span>{String(footer.copyright || "").replace("{year}", new Date().getFullYear())}</span><span>{policies.map((item)=><Link to={item.url} key={item.id}>{item.label}</Link>)}</span><span>{footer.bottomNote}</span></div>
     </footer>
   );
 }

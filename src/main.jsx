@@ -6,6 +6,7 @@ import App from "./App";
 import { AuthProvider } from "./contexts/AuthContext";
 import { CatalogProvider } from "./contexts/CatalogContext";
 import { CommerceProvider } from "./contexts/CommerceContext";
+import { SiteContentProvider } from "./contexts/SiteContentContext";
 import LanguageProvider from "./contexts/LanguageProvider";
 import "./index.css";
 
@@ -13,11 +14,13 @@ createRoot(document.getElementById("root")).render(
   <StrictMode>
     <AuthProvider>
       <CatalogProvider>
-        <CommerceProvider>
-          <LanguageProvider>
-            <BrowserRouter><App /></BrowserRouter>
-          </LanguageProvider>
-        </CommerceProvider>
+        <SiteContentProvider>
+          <CommerceProvider>
+            <LanguageProvider>
+              <BrowserRouter><App /></BrowserRouter>
+            </LanguageProvider>
+          </CommerceProvider>
+        </SiteContentProvider>
       </CatalogProvider>
     </AuthProvider>
   </StrictMode>,

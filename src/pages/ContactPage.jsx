@@ -1,23 +1,18 @@
 import { Mail, MapPin, Phone } from "lucide-react";
+import { useSiteContent } from "../contexts/SiteContentContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 
 export default function ContactPage() {
-  useDocumentTitle("Contact");
-  return (
-    <div className="page-shell">
-      <section className="contact-layout">
-        <div>
-          <p className="eyebrow">We’d love to hear from you</p>
-          <h1>Let’s begin a<br /><em>good conversation.</em></h1>
-          <p>For retail enquiries, gifting conversations, partnerships or help with the range, reach out to the Kisan Gaurav team.</p>
-        </div>
-        <div className="contact-panel">
-          <a href="mailto:hello@kisangauraav.com"><Mail /> <span><small>Email</small>hello@kisangauraav.com</span></a>
-          <a href="tel:+919876543210"><Phone /> <span><small>Call</small>+91 98765 43210</span></a>
-          <div><MapPin /> <span><small>Based in</small>India</span></div>
-          <p>Business hours · Monday to Saturday · 10:00–18:00 IST</p>
-        </div>
-      </section>
-    </div>
-  );
+  const { get, loading } = useSiteContent();
+  const entry = get("page","contact"); const content = entry?.content || {};
+  useDocumentTitle(entry?.title || "Contact", entry?.excerpt);
+  if (loading) return <div className="commerce-empty">Loading…</div>;
+  return <div className="page-shell"><section className="contact-layout"><div><p className="eyebrow">{entry?.excerpt}</p><h1>{entry?.title}</h1><p>{content.introduction}</p></div><div className="contact-panel">
+    {content.email ? <a href={`mailto:${content.email}`}><Mail/><span><small>Email</small>{content.email}</span></a> : null}
+    {content.phone ? <a href={`tel:${String(content.phone).replace(/\s/g,"")}`}><Phone/><span><small>Call</small>{content.phone}</span></a> : null}
+    {content.address ? <div><MapPin/><span><small>Address</small>{content.address}</span></div> : null}
+    {(content.businessHours || []).map((item)=><p key={item.days}>{item.days} · {item.hours}</p>)}
+    {content.googleMapUrl ? <iframe title="Kisan Gaurav location" src={content.googleMapUrl} loading="lazy" referrerPolicy="no-referrer-when-downgrade"/> : null}
+    {(content.socialLinks || []).map((item)=><a href={item.url} key={item.label}>{item.label}</a>)}
+  </div></section></div>;
 }
