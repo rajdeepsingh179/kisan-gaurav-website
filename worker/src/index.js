@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { handleAuth, getSession, hashPassword, verifyPassword } from "./auth.js";
+import { handleAuth, getSession, hashPassword, passwordValidationError, verifyPassword } from "./auth.js";
 import { calculateCheckout, id, json, persistOrder } from "./commerce.js";
 import { databaseHTTPError, HTTPError } from "./http.js";
 import {
@@ -111,21 +111,51 @@ app.all("/api/auth/*", (c) => handleAuth(c.req.raw, c.env));
 app.post("/api/account/signup", async (c) => {
   const data = await body(c);
   const email = String(data.email || "").trim().toLowerCase();
-  if (!email.includes("@") || String(data.password || "").length < 8 || !data.name) throw new HTTPError(400, "Name, valid email and an 8-character password are required.");
-  const existing = await c.env.DB.prepare("SELECT id FROM users WHERE email=?1").bind(email).first();
-  if (existing) throw new HTTPError(409, "An account already exists for this email.");
+  const firstName = String(data.firstName || "").trim();
+  const lastName = String(data.lastName || "").trim();
+  const name = `${firstName} ${lastName}`.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !firstName || !lastName) {
+    throw new HTTPError(400, "First name, last name, and a valid email are required.");
+  }
+  const passwordError = passwordValidationError(data.password);
+  if (passwordError) throw new HTTPError(400, passwordError, "weak_password");
+  const existing = await c.env.DB.prepare("SELECT id,password_hash FROM users WHERE email=?1").bind(email).first();
+  if (existing?.password_hash) throw new HTTPError(409, "An account already exists for this email. Sign in or reset your password.", "account_exists");
   const password = await hashPassword(String(data.password));
-  const userId = id();
+  const userId = existing?.id || id();
+  const rawToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+  const tokenHash = await sha256(rawToken);
+  const verificationUrl = `${c.env.FRONTEND_URL.replace(/\/$/, "")}/verify-email?token=${encodeURIComponent(rawToken)}`;
   await c.env.DB.batch([
-    c.env.DB.prepare("INSERT INTO users(id,email,name,mobile,password_hash,password_salt) VALUES(?1,?2,?3,?4,?5,?6)").bind(userId, email, String(data.name).trim(), data.mobile || null, password.hash, password.salt),
-    c.env.DB.prepare("INSERT INTO notifications(id,user_id,channel,event_type,recipient,payload_json) VALUES(?1,?2,'email','welcome',?3,?4)").bind(id(),userId,email,json({name:String(data.name).trim()})),
+    ...(existing
+      ? [c.env.DB.prepare("UPDATE users SET name=?1,first_name=?2,last_name=?3,updated_at=CURRENT_TIMESTAMP WHERE id=?4").bind(name, firstName, lastName, userId)]
+      : [c.env.DB.prepare("INSERT INTO users(id,email,name,first_name,last_name) VALUES(?1,?2,?3,?4,?5)").bind(userId, email, name, firstName, lastName)]),
+    c.env.DB.prepare("DELETE FROM email_verification_tokens WHERE user_id=?1 OR expires_at<CURRENT_TIMESTAMP").bind(userId),
+    c.env.DB.prepare("INSERT INTO email_verification_tokens(token_hash,user_id,pending_password_hash,pending_password_salt,pending_password_iterations,expires_at) VALUES(?1,?2,?3,?4,?5,datetime('now','+24 hours'))").bind(tokenHash, userId, password.hash, password.salt, password.iterations),
+    c.env.DB.prepare("INSERT INTO notifications(id,user_id,channel,event_type,recipient,payload_json) VALUES(?1,?2,'email','email_verification',?3,?4)").bind(id(), userId, email, json({ name, verificationUrl })),
   ]);
-  return c.json({ id: userId, email }, 201);
+  return c.json({ id: userId, email, requiresVerification: true, message: "Check your email to verify your account before signing in." }, 202);
+});
+
+app.post("/api/account/verify-email", async (c) => {
+  const data = await body(c);
+  const tokenHash = await sha256(String(data.token || ""));
+  const token = await c.env.DB.prepare("SELECT * FROM email_verification_tokens WHERE token_hash=?1 AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP").bind(tokenHash).first();
+  if (!token) throw new HTTPError(400, "Verification link is invalid or expired.", "invalid_verification_token");
+  const user = await c.env.DB.prepare("SELECT email,name FROM users WHERE id=?1").bind(token.user_id).first();
+  if (!user) throw new HTTPError(400, "Verification link is invalid or expired.", "invalid_verification_token");
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,password_iterations=?3,email_verified_at=COALESCE(email_verified_at,CURRENT_TIMESTAMP),failed_login_count=0,locked_until=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?4").bind(token.pending_password_hash, token.pending_password_salt, token.pending_password_iterations, token.user_id),
+    c.env.DB.prepare("UPDATE email_verification_tokens SET used_at=CURRENT_TIMESTAMP WHERE token_hash=?1").bind(tokenHash),
+    c.env.DB.prepare("DELETE FROM email_verification_tokens WHERE user_id=?1 AND token_hash<>?2").bind(token.user_id, tokenHash),
+    c.env.DB.prepare("INSERT INTO notifications(id,user_id,channel,event_type,recipient,payload_json) VALUES(?1,?2,'email','welcome',?3,?4)").bind(id(), token.user_id, user.email, json({ name: user.name })),
+  ]);
+  return c.json({ ok: true, message: "Email verified. You can now sign in." });
 });
 
 app.post("/api/account/forgot-password", async (c) => {
   const data = await body(c);
-  const user = await c.env.DB.prepare("SELECT id,email FROM users WHERE email=?1").bind(String(data.email || "").toLowerCase()).first();
+  const user = await c.env.DB.prepare("SELECT id,email FROM users WHERE email=?1 AND email_verified_at IS NOT NULL").bind(String(data.email || "").trim().toLowerCase()).first();
   if (user) {
     const rawToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
     const tokenHash = await sha256(rawToken);
@@ -140,13 +170,14 @@ app.post("/api/account/forgot-password", async (c) => {
 
 app.post("/api/account/reset-password", async (c) => {
   const data = await body(c);
-  if (String(data.password || "").length < 8) throw new HTTPError(400, "Password must contain at least 8 characters.");
+  const passwordError = passwordValidationError(data.password);
+  if (passwordError) throw new HTTPError(400, passwordError, "weak_password");
   const tokenHash = await sha256(String(data.token || ""));
   const token = await c.env.DB.prepare("SELECT * FROM password_reset_tokens WHERE token_hash=?1 AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP").bind(tokenHash).first();
   if (!token) throw new HTTPError(400, "Reset link is invalid or expired.");
   const password = await hashPassword(String(data.password));
   await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(password.hash, password.salt, token.user_id),
+    c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,password_iterations=?3,session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?4").bind(password.hash, password.salt, password.iterations, token.user_id),
     c.env.DB.prepare("UPDATE password_reset_tokens SET used_at=CURRENT_TIMESTAMP WHERE token_hash=?1").bind(tokenHash),
   ]);
   return c.json({ ok: true });
@@ -412,7 +443,7 @@ app.patch("/api/admin/account/password", async (c) => {
   const stored=await c.env.DB.prepare("SELECT password_hash,password_salt FROM users WHERE id=?1").bind(admin.id).first();
   if(!stored?.password_hash||!(await verifyPassword(String(data.currentPassword||""),stored.password_salt,stored.password_hash)))throw new HTTPError(400,"Current password is incorrect.");
   const password=await hashPassword(String(data.newPassword));
-  await c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,must_change_password=0,session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(password.hash,password.salt,admin.id).run();
+  await c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,password_iterations=?3,must_change_password=0,session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?4").bind(password.hash,password.salt,password.iterations,admin.id).run();
   await audit(c,"password_changed","user",admin.id);
   return c.json({ok:true});
 });

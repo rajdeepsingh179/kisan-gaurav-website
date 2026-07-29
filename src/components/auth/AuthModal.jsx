@@ -1,7 +1,7 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, m } from "framer-motion";
-import { X } from "lucide-react";
+import { Eye, EyeOff, X } from "lucide-react";
 
 import { Button } from "../ui";
 import BrandMark from "../brand/BrandMark";
@@ -9,7 +9,7 @@ import BrandMark from "../brand/BrandMark";
 const focusableSelector =
   'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-export function FormField({ autoComplete, label, name, type = "text" }) {
+export function FormField({ autoComplete, label, name, type = "text", ...inputProps }) {
   const inputId = useId();
 
   return (
@@ -24,7 +24,38 @@ export function FormField({ autoComplete, label, name, type = "text" }) {
         type={type}
         autoComplete={autoComplete}
         required
+        {...inputProps}
       />
+    </div>
+  );
+}
+
+export function PasswordField({ label, name, autoComplete, ...inputProps }) {
+  const [visible, setVisible] = useState(false);
+  const inputId = useId();
+  return (
+    <div className="space-y-1.5">
+      <label className="block text-sm font-semibold text-foreground" htmlFor={inputId}>{label}</label>
+      <div className="relative">
+        <input
+          {...inputProps}
+          className="min-h-11 w-full rounded-control border border-border bg-surface px-3.5 pr-11 text-sm text-foreground shadow-soft outline-none transition placeholder:text-neutral-400 hover:border-neutral-300 focus:border-primary-600 focus:ring-3 focus:ring-primary-100"
+          id={inputId}
+          name={name}
+          type={visible ? "text" : "password"}
+          autoComplete={autoComplete}
+          required
+        />
+        <button
+          aria-label={visible ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+          aria-pressed={visible}
+          className="absolute inset-y-0 right-0 grid w-11 place-items-center text-foreground-muted hover:text-foreground"
+          type="button"
+          onClick={() => setVisible((value) => !value)}
+        >
+          {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+        </button>
+      </div>
     </div>
   );
 }

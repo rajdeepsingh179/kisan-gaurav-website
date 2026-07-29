@@ -28,6 +28,11 @@ function authErrorFrom(url, fallback) {
   return null;
 }
 
+function canonicalCallbackUrl() {
+  const canonicalOrigin = import.meta.env.VITE_CANONICAL_ORIGIN || window.location.origin.replace("://www.", "://");
+  return new URL(`${window.location.pathname}${window.location.search}${window.location.hash}`, canonicalOrigin).toString();
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -44,24 +49,25 @@ export function AuthProvider({ children }) {
     return () => { active = false; };
   }, []);
 
-  const credentialsSignIn = useCallback(async (email, password) => {
+  const credentialsSignIn = useCallback(async (email, password, rememberMe = false) => {
     const { csrfToken } = await authCsrf();
-    const redirectUrl = await postAuthAction("/api/auth/callback/credentials", { csrfToken, email, password, callbackUrl: window.location.href });
-    const error = authErrorFrom(redirectUrl, "Email or password is incorrect.");
+    const redirectUrl = await postAuthAction("/api/auth/callback/credentials", {
+      csrfToken, email, password, rememberMe: rememberMe ? "1" : "0", callbackUrl: canonicalCallbackUrl(),
+    });
+    const error = authErrorFrom(redirectUrl, "Unable to sign in. Check your credentials, verify your email, or wait 15 minutes if your account is locked.");
     if (error) throw new Error(error);
     if (!(await refreshSession())) throw new Error("Sign-in did not create a valid session.");
   }, [refreshSession]);
   const signInGoogle = useCallback(async () => {
     const { csrfToken } = await authCsrf();
-    const redirectUrl = await postAuthAction("/api/auth/signin/google", { csrfToken, callbackUrl: window.location.href });
+    const redirectUrl = await postAuthAction("/api/auth/signin/google", { csrfToken, callbackUrl: canonicalCallbackUrl() });
     const error = authErrorFrom(redirectUrl, "Google sign-in is unavailable.");
     if (error) throw new Error(error);
     window.location.assign(redirectUrl);
   }, []);
-  const signUpEmail = useCallback(async ({ email, password, displayName, mobile }) => {
-    await apiFetch("/api/account/signup", { method: "POST", body: JSON.stringify({ email, password, name: displayName, mobile }) });
-    return credentialsSignIn(email, password);
-  }, [credentialsSignIn]);
+  const signUpEmail = useCallback(({ firstName, lastName, email, password }) => (
+    apiFetch("/api/account/signup", { method: "POST", body: JSON.stringify({ firstName, lastName, email, password }) })
+  ), []);
   const signOutUser = useCallback(async () => {
     const { csrfToken } = await authCsrf();
     const redirectUrl = await postAuthAction("/api/auth/signout", { csrfToken, callbackUrl: window.location.origin });
@@ -78,6 +84,7 @@ export function AuthProvider({ children }) {
     signInGoogle,
     forgotPassword: (email) => apiFetch("/api/account/forgot-password", { method: "POST", body: JSON.stringify({ email }) }),
     resetPassword: (token, password) => apiFetch("/api/account/reset-password", { method: "POST", body: JSON.stringify({ token, password }) }),
+    verifyEmail: (token) => apiFetch("/api/account/verify-email", { method: "POST", body: JSON.stringify({ token }) }),
     signOutUser,
     refreshSession,
   }), [credentialsSignIn, loading, refreshSession, signInGoogle, signOutUser, signUpEmail, user]);

@@ -8,22 +8,54 @@ const DUMMY_PASSWORD = {
   salt: "kg-auth-timing-v1",
   hash: "c103993171ec6094acabc6dd6e81deca8b230ad20471b94a5e6058e05f4380b6",
 };
+const PASSWORD_ITERATIONS = 600000;
+const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
+const canonicalOrigin = (env) => {
+  try { return new URL(env.FRONTEND_URL || "https://kisangaurav.com"); } catch { return new URL("https://kisangaurav.com"); }
+};
+const authCookies = (env) => {
+  const origin = canonicalOrigin(env);
+  const production = origin.protocol === "https:" && !["localhost", "127.0.0.1"].includes(origin.hostname);
+  const domain = production && origin.hostname.split(".").length > 1
+    ? `.${origin.hostname.replace(/^www\./, "")}`
+    : undefined;
+  const options = { httpOnly: true, sameSite: "lax", path: "/", secure: production, ...(domain ? { domain } : {}) };
+  const prefix = production ? "__Secure-" : "";
+  return {
+    sessionToken: { name: `${prefix}authjs.session-token`, options },
+    callbackUrl: { name: `${prefix}authjs.callback-url`, options },
+    csrfToken: { name: `${prefix}authjs.csrf-token`, options },
+    pkceCodeVerifier: { name: `${prefix}authjs.pkce.code_verifier`, options: { ...options, maxAge: 900 } },
+    state: { name: `${prefix}authjs.state`, options: { ...options, maxAge: 900 } },
+    nonce: { name: `${prefix}authjs.nonce`, options },
+  };
+};
 const authAudit = (env, actorUserId, action, details = {}, ipAddress = null) => env.DB.prepare(
   "INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json,ip_address) VALUES(?1,?2,?3,'authentication',?4,?5,?6)",
 ).bind(crypto.randomUUID(), actorUserId || null, action, actorUserId || null, JSON.stringify(details), ipAddress).run();
 
-export async function hashPassword(password, salt = crypto.randomUUID()) {
+export async function hashPassword(password, salt = crypto.randomUUID(), iterations = PASSWORD_ITERATIONS) {
   const material = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: encoder.encode(salt), iterations: 100000, hash: "SHA-256" }, material, 256);
-  return { salt, hash: hex(bits) };
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: encoder.encode(salt), iterations, hash: "SHA-256" }, material, 256);
+  return { salt, hash: hex(bits), iterations };
 }
 
-export async function verifyPassword(password, salt, expected) {
-  const result = await hashPassword(password, salt);
+export async function verifyPassword(password, salt, expected, iterations = PASSWORD_ITERATIONS) {
+  const result = await hashPassword(password, salt, iterations);
   if (result.hash.length !== expected.length) return false;
   let mismatch = 0;
   for (let index = 0; index < expected.length; index += 1) mismatch |= result.hash.charCodeAt(index) ^ expected.charCodeAt(index);
   return mismatch === 0;
+}
+
+export function passwordValidationError(password) {
+  const value = String(password || "");
+  if (value.length < 12) return "Password must contain at least 12 characters.";
+  if (value.length > 256) return "Password must contain no more than 256 characters.";
+  if (!/[a-z]/.test(value) || !/[A-Z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9]/.test(value)) {
+    return "Password must include uppercase, lowercase, a number, and a symbol.";
+  }
+  return null;
 }
 
 export function authConfig(env) {
@@ -43,22 +75,33 @@ export function authConfig(env) {
           await authAudit(env, null, "login_rate_limited", { email }, ip);
           return null;
         }
-        const user = credentialsValid ? await env.DB.prepare("SELECT u.id,u.email,u.name,COALESCE(up.role,u.role) role,u.profile_photo_url,u.password_hash,u.password_salt,u.must_change_password,u.session_version FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id WHERE u.email=?1").bind(email).first() : null;
+        const user = credentialsValid ? await env.DB.prepare("SELECT u.id,u.email,u.name,COALESCE(up.role,u.role) role,u.profile_photo_url,u.password_hash,u.password_salt,u.password_iterations,u.must_change_password,u.session_version,u.email_verified_at,u.failed_login_count,u.locked_until,(u.locked_until>CURRENT_TIMESTAMP) account_locked FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id WHERE u.email=?1").bind(email).first() : null;
+        const accountLocked = Boolean(user?.account_locked);
         const passwordMatches = await verifyPassword(
           credentialsValid ? rawPassword : rawPassword.slice(0, 256),
           user?.password_salt || DUMMY_PASSWORD.salt,
           user?.password_hash || DUMMY_PASSWORD.hash,
+          Number(user?.password_iterations || PASSWORD_ITERATIONS),
         );
-        if (!user?.password_hash || !passwordMatches) {
+        if (!user?.password_hash || !passwordMatches || !user?.email_verified_at || accountLocked) {
+          const nextFailures = Number(user?.failed_login_count || 0) + 1;
+          const lockAccount = user && (accountLocked || nextFailures >= 10);
           await env.DB.batch([
             env.DB.prepare("INSERT INTO admin_login_attempts(id,email,ip_address,succeeded) VALUES(?1,?2,?3,0)").bind(crypto.randomUUID(),email,ip),
             env.DB.prepare("INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json,ip_address) VALUES(?1,NULL,'login_failed','authentication',NULL,?2,?3)").bind(crypto.randomUUID(),JSON.stringify({ email }),ip),
+            ...(user ? [env.DB.prepare("UPDATE users SET failed_login_count=?1,locked_until=CASE WHEN ?2=1 THEN datetime('now','+15 minutes') ELSE locked_until END,updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(nextFailures, lockAccount ? 1 : 0, user.id)] : []),
           ]);
           return null;
+        }
+        if (Number(user.password_iterations) < PASSWORD_ITERATIONS) {
+          const upgraded = await hashPassword(rawPassword);
+          await env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,password_iterations=?3,updated_at=CURRENT_TIMESTAMP WHERE id=?4")
+            .bind(upgraded.hash, upgraded.salt, upgraded.iterations, user.id).run();
         }
         await env.DB.batch([
           env.DB.prepare("INSERT INTO admin_login_attempts(id,email,ip_address,succeeded) VALUES(?1,?2,?3,1)").bind(crypto.randomUUID(),email,ip),
           env.DB.prepare("DELETE FROM admin_login_attempts WHERE attempted_at<datetime('now','-1 day')"),
+          env.DB.prepare("UPDATE users SET failed_login_count=0,locked_until=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?1").bind(user.id),
           env.DB.prepare("INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json,ip_address) VALUES(?1,?2,'login_succeeded','authentication',?2,?3,?4)").bind(crypto.randomUUID(),user.id,JSON.stringify({ provider: "credentials" }),ip),
         ]);
         return { id: user.id, email: user.email, name: user.name, role: user.role, image: user.profile_photo_url, mustChangePassword: Boolean(user.must_change_password), sessionVersion: Number(user.session_version) };
@@ -70,7 +113,8 @@ export function authConfig(env) {
     basePath: "/api/auth",
     secret: env.AUTH_SECRET,
     trustHost: true,
-    session: { strategy: "jwt", maxAge: 60 * 60 * 24 * 30 },
+    session: { strategy: "jwt", maxAge: SESSION_MAX_AGE },
+    cookies: authCookies(env),
     providers,
     callbacks: {
       async signIn({ user, account, profile }) {
@@ -143,8 +187,47 @@ export function authConfig(env) {
   };
 }
 
-export function handleAuth(request, env) {
-  return Auth(request, authConfig(env));
+function makeBrowserSessionCookie(response) {
+  const headers = new Headers(response.headers);
+  const setCookies = typeof response.headers.getSetCookie === "function"
+    ? response.headers.getSetCookie()
+    : [response.headers.get("set-cookie")].filter(Boolean);
+  if (!setCookies.length) return response;
+  headers.delete("set-cookie");
+  for (const cookie of setCookies) {
+    const sessionCookie = cookie.includes("authjs.session-token")
+      ? cookie.replace(/;\s*Expires=[^;]+/gi, "").replace(/;\s*Max-Age=\d+/gi, "")
+      : cookie;
+    headers.append("set-cookie", sessionCookie);
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+export async function handleAuth(request, env) {
+  const originalUrl = new URL(request.url);
+  let rememberCredentials = true;
+  if (request.method === "POST" && originalUrl.pathname.endsWith("/callback/credentials")) {
+    const form = await request.clone().formData().catch(() => null);
+    rememberCredentials = form?.get("rememberMe") === "1";
+  }
+  const canonical = canonicalOrigin(env);
+  const local = ["localhost", "127.0.0.1"].includes(originalUrl.hostname);
+  if (!local) {
+    originalUrl.protocol = canonical.protocol;
+    originalUrl.host = canonical.host;
+  }
+  const headers = new Headers(request.headers);
+  if (!local) {
+    headers.set("x-forwarded-host", canonical.host);
+    headers.set("x-forwarded-proto", canonical.protocol.replace(":", ""));
+  }
+  const response = await Auth(new Request(originalUrl, {
+    method: request.method,
+    headers,
+    body: ["GET", "HEAD"].includes(request.method) ? undefined : await request.arrayBuffer(),
+    redirect: request.redirect,
+  }), authConfig(env));
+  return rememberCredentials ? response : makeBrowserSessionCookie(response);
 }
 
 export async function getSession(request, env) {

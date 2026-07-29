@@ -21,6 +21,7 @@ const AccountPage = lazy(() => import("./pages/AccountPage"));
 const OrderSuccessPage = lazy(() => import("./pages/OrderSuccessPage"));
 const AdminPage = lazy(() => import("./pages/AdminPage"));
 const PasswordResetPage = lazy(() => import("./pages/PasswordResetPage"));
+const EmailVerificationPage = lazy(() => import("./pages/EmailVerificationPage"));
 const KisanDigitalPage = lazy(() => import("./pages/KisanDigitalPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 const FaqPage = lazy(() => import("./pages/FaqPage"));
@@ -65,6 +66,7 @@ export default function App() {
               <Route path="order-success/:orderId" element={<OrderSuccessPage />} />
               <Route path="forgot-password" element={<PasswordResetPage />} />
               <Route path="reset-password" element={<PasswordResetPage />} />
+              <Route path="verify-email" element={<EmailVerificationPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Routes>

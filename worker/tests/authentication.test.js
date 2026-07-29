@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { authConfig, hashPassword, verifyPassword } from "../src/auth.js";
+import { authConfig, hashPassword, passwordValidationError, verifyPassword } from "../src/auth.js";
 
 const statement = (row = null) => ({
   bind() { return this; },
@@ -12,6 +12,15 @@ test("password hashing verifies the intended password without storing plaintext"
   assert.notEqual(stored.hash, "Correct horse battery staple");
   assert.equal(await verifyPassword("Correct horse battery staple", stored.salt, stored.hash), true);
   assert.equal(await verifyPassword("wrong password", stored.salt, stored.hash), false);
+});
+
+test("customer passwords require length and mixed character classes", () => {
+  assert.match(passwordValidationError("short"), /12 characters/);
+  assert.match(passwordValidationError("alllowercase123!"), /uppercase/);
+  assert.match(passwordValidationError("ALLUPPERCASE123!"), /lowercase/);
+  assert.match(passwordValidationError("NoNumbersHere!"), /number/);
+  assert.match(passwordValidationError("NoSymbolsHere123"), /symbol/);
+  assert.equal(passwordValidationError("Strong password 123!"), null);
 });
 
 test("Auth.js uses JWT persistence, a bounded lifetime, and Google only when configured", () => {
@@ -27,6 +36,9 @@ test("Auth.js uses JWT persistence, a bounded lifetime, and Google only when con
     DB: { prepare: () => statement() },
   });
   assert.deepEqual(withGoogle.providers.map((provider) => provider.id), ["google", "credentials"]);
+  assert.equal(withGoogle.cookies.sessionToken.options.sameSite, "lax");
+  assert.equal(withGoogle.cookies.sessionToken.options.secure, true);
+  assert.equal(withGoogle.cookies.sessionToken.options.domain, ".kisangaurav.com");
 });
 
 test("JWT and session callbacks preserve role and session-version claims", async () => {

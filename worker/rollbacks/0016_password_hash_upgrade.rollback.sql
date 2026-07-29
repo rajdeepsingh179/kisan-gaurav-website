@@ -1,0 +1,1 @@
+-- SQLite/D1 production rollbacks intentionally retain additive hash metadata.

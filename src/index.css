@@ -1316,13 +1316,19 @@ em { font-family: Georgia, "Times New Roman", serif; font-weight: 400; }
 .cart-drawer > footer > a { display:flex; justify-content:center; margin-top:10px; padding:12px; background:var(--store-green); color:white; font-size:10px; font-weight:750; }
 .cart-drawer > footer > a:last-child { background:transparent; color:var(--store-green); border:1px solid var(--store-green); }
 .auth-page { display:grid; place-items:center; min-height:650px; padding:50px 20px; background:#e9dfcc; }
-.auth-page form { display:grid; width:min(480px,100%); padding:38px; background:#fbf7ef; box-shadow:0 20px 60px rgb(18 59 42 / .12); }
+.auth-page form, .auth-page__card { display:grid; width:min(480px,100%); padding:38px; background:#fbf7ef; box-shadow:0 20px 60px rgb(18 59 42 / .12); }
 .auth-page h1 { margin:0; font-family:Georgia,serif; font-size:38px; font-weight:400; }
 .auth-page p:not(.eyebrow) { color:#718078; }
 .auth-page input { min-height:46px; padding:0 13px; border:1px solid #cfc5b2; }
 .auth-page button { margin-top:12px; padding:13px; border:0; background:var(--store-green); color:white; }
 .auth-page span { margin-top:13px; color:#586b60; font-size:11px; }
-.auth-page a { margin-top:18px; color:var(--store-green); font-size:10px; text-decoration:underline; }
+.auth-page a { margin-top:18px; color:var(--store-green); font-size:12px; text-decoration:underline; }
+.auth-page input + input { margin-top:10px; }
+@media (max-width: 520px) {
+  .auth-page { min-height:560px; padding:24px 14px; }
+  .auth-page form, .auth-page__card { padding:26px 20px; }
+  .auth-page h1 { font-size:32px; }
+}
 .profile-card img { width:58px; height:58px; border-radius:50%; object-fit:cover; }
 .profile-card label { margin-top:8px; color:var(--store-green); font-size:9px; cursor:pointer; }
 .profile-card label input { display:block; max-width:220px; margin-top:5px; font-size:8px; }

@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "Kisan Gaurav Foods",
+  "short_name": "Kisan Gaurav",
+  "description": "Premium foods, dry fruits, mindful snacks, and thoughtful gifts.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fbf7ef",
+  "theme_color": "#123b2a",
+  "icons": [
+    {
+      "src": "/brand/kisan-gaurav-logo-256.webp",
+      "sizes": "256x256",
+      "type": "image/webp",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/brand/kisan-gaurav-logo-512.webp",
+      "sizes": "512x512",
+      "type": "image/webp",
+      "purpose": "any maskable"
+    }
+  ]
+}
