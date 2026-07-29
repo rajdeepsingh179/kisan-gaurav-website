@@ -1,6 +1,15 @@
 import { Hono } from "hono";
-import { handleAuth, getSession, hashPassword, verifyPassword } from "./auth";
-import { calculateCheckout, id, json, persistOrder } from "./commerce";
+import { handleAuth, getSession, hashPassword, verifyPassword } from "./auth.js";
+import { calculateCheckout, id, json, persistOrder } from "./commerce.js";
+import { databaseHTTPError, HTTPError } from "./http.js";
+import {
+  assertRequestSize, contentHash, enforceRateLimit, rateProfile, sanitizeAuditDetails,
+  securityHeaders, validateMediaUpload,
+} from "./security.js";
+import {
+  assertSafeStructuredValue, validateCategory, validateCmsEntry,
+  validateCoupon, validateOrderRequest, validateProduct, validateSetting,
+} from "./validation.js";
 
 const app = new Hono();
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -23,6 +32,10 @@ const isTrustedOrigin = (c, origin) => {
 };
 
 app.use("*", async (c, next) => {
+  const requestId = c.req.header("CF-Ray") || crypto.randomUUID();
+  c.set("requestId", requestId);
+  for (const [name, value] of Object.entries(securityHeaders())) c.header(name, value);
+  c.header("X-Request-ID", requestId);
   const origin = c.req.header("Origin");
   if (origin && isTrustedOrigin(c, origin)) {
     c.header("Access-Control-Allow-Origin", origin);
@@ -31,14 +44,21 @@ app.use("*", async (c, next) => {
   }
   c.header("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token");
   c.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  c.header("X-Content-Type-Options", "nosniff");
-  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
   if (c.req.method === "OPTIONS") return c.body(null, 204);
-  if (!SAFE_METHODS.has(c.req.method) && c.req.path.startsWith("/api/") && !c.req.path.startsWith("/api/auth/")) {
+  if (!SAFE_METHODS.has(c.req.method) && c.req.path.startsWith("/api/")) {
     const source = origin || c.req.header("Referer");
-    if (!isTrustedOrigin(c, source)) return c.json({ error: "Request origin is not allowed." }, 403);
+    if (!isTrustedOrigin(c, source)) {
+      console.warn(json({ event: "request_origin_rejected", requestId, method: c.req.method, path: c.req.path, ip: c.req.header("CF-Connecting-IP") || null }));
+      return c.json({ error: "Request origin is not allowed." }, 403);
+    }
+  }
+  if (!SAFE_METHODS.has(c.req.method)) {
+    assertRequestSize(c.req.raw, c.req.path === "/api/admin/uploads" || c.req.path.endsWith("/replace") ? 14_000_000 : 1_000_000);
+    const profile = rateProfile(c.req.path, c.req.method);
+    if (profile) await enforceRateLimit(c, profile);
   }
   await next();
+  if (c.req.path.startsWith("/api/admin/") || c.req.path.startsWith("/api/auth/")) c.header("Cache-Control", "private, no-store");
 });
 
 const sessionFor = (c) => getSession(c.req.raw, c.env);
@@ -49,14 +69,26 @@ const requireUser = async (c) => {
   return session.user;
 };
 const body = async (c) => {
-  try { return await c.req.json(); } catch { throw new HTTPError(400, "Invalid JSON body."); }
+  if (!/^application\/(?:[\w.-]+\+)?json(?:;|$)/i.test(c.req.header("Content-Type") || "")) {
+    throw new HTTPError(415, "Content-Type must be application/json.", "unsupported_content_type");
+  }
+  let raw;
+  try { raw = await c.req.text(); } catch { throw new HTTPError(400, "Unable to read request body."); }
+  if (new TextEncoder().encode(raw).byteLength > 1_000_000) throw new HTTPError(413, "Request body is too large.", "payload_too_large");
+  try { return JSON.parse(raw); } catch { throw new HTTPError(400, "Invalid JSON body."); }
 };
-class HTTPError extends Error { constructor(status, message) { super(message); this.status = status; } }
 
-app.onError((error, c) => {
-  if (error instanceof HTTPError) return c.json({ error: error.message }, error.status);
-  console.error("Unhandled request error", error);
-  return c.json({ error: "Unexpected server error." }, 500);
+app.onError(async (error, c) => {
+  const normalizedError = error instanceof HTTPError ? error : databaseHTTPError(error);
+  if (normalizedError && [401, 403, 429].includes(normalizedError.status)) {
+    console.warn(json({ event: "security_request_rejected", requestId: c.get("requestId"), status: normalizedError.status, code: normalizedError.code, method: c.req.method, path: c.req.path, ip: c.req.header("CF-Connecting-IP") || null }));
+  }
+  if (normalizedError && normalizedError.status >= 400 && c.get("admin")) {
+    await audit(c, "request_rejected", "security", null, { code: normalizedError.code, status: normalizedError.status, reason: normalizedError.message }).catch((auditError) => console.error("Audit log failure", auditError));
+  }
+  if (normalizedError) return c.json({ error: normalizedError.message, code: normalizedError.code, requestId: c.get("requestId") }, normalizedError.status);
+  console.error("Unhandled request error", { requestId: c.get("requestId"), error });
+  return c.json({ error: "Unexpected server error.", code: "internal_error", requestId: c.get("requestId") }, 500);
 });
 app.get("/api/health", (c) => c.json({ ok: true, service: "kisan-gaurav-api", timestamp: new Date().toISOString() }));
 app.get("/sitemap.xml", async (c) => {
@@ -134,9 +166,10 @@ app.post("/api/account/profile-photo", async (c) => {
   const user = await requireUser(c);
   const form = await c.req.formData();
   const file = form.get("file");
-  if (!(file instanceof File) || !file.type.startsWith("image/") || file.size > 5_000_000) throw new HTTPError(400, "Upload a profile image under 5 MB.");
-  const key = `profiles/${user.id}/${crypto.randomUUID()}.${file.type.split("/")[1] || "webp"}`;
-  await c.env.MEDIA.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type, cacheControl: "public,max-age=31536000,immutable" } });
+  const fileBytes = file instanceof File ? await file.arrayBuffer() : new ArrayBuffer(0);
+  const validated = validateMediaUpload(file, fileBytes, { profile: true, maxBytes: 5_000_000 });
+  const key = `profiles/${user.id}/${crypto.randomUUID()}.${validated.extension}`;
+  await c.env.MEDIA.put(key, fileBytes, { httpMetadata: { contentType: file.type, cacheControl: "public,max-age=31536000,immutable" } });
   const url = `${new URL(c.req.url).origin}/api/media/${key}`;
   await c.env.DB.prepare("UPDATE users SET profile_photo_url=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2").bind(url, user.id).run();
   return c.json({ url });
@@ -171,16 +204,14 @@ app.put("/api/customer-state/:key", async (c) => {
 
 app.post("/api/checkout/quote", async (c) => c.json(await calculateCheckout(c.env, await body(c))));
 app.post("/api/orders", async (c) => {
-  const data = await body(c); const session = await sessionFor(c);
-  if (!data.customer?.email || !data.customer?.phone || !data.address?.pincode) throw new HTTPError(400, "Complete contact and shipping details are required.");
+  const data = validateOrderRequest(await body(c)); const session = await sessionFor(c);
   const checkout = await calculateCheckout(c.env, data);
   if (data.paymentMethod !== "cod") throw new HTTPError(400, "Use the payment order endpoint for online payments.");
   const order = await persistOrder(c.env, data, checkout, session?.user?.id, { method: "cod", status: "pending" });
-  if (session?.user?.id && data.saveAddress) await c.env.DB.prepare("INSERT INTO addresses(id,user_id,label,recipient_name,mobile,line1,line2,city,state,pincode) VALUES(?1,?2,'Order address',?3,?4,?5,?6,?7,?8,?9)").bind(id(), session.user.id, data.customer.name, data.customer.phone, data.address.line1, data.address.line2 || null, data.address.city, data.address.state, data.address.pincode).run();
   return c.json(order, 201);
 });
 app.post("/api/payments/razorpay/order", async (c) => {
-  const data = await body(c); const session = await sessionFor(c); const checkout = await calculateCheckout(c.env, data);
+  const data = validateOrderRequest(await body(c)); const session = await sessionFor(c); const checkout = await calculateCheckout(c.env, data);
   const response = await fetch("https://api.razorpay.com/v1/orders", { method: "POST", headers: { Authorization: `Basic ${btoa(`${c.env.RAZORPAY_KEY_ID}:${c.env.RAZORPAY_KEY_SECRET}`)}`, "Content-Type": "application/json" }, body: json({ amount: checkout.totalPaise, currency: "INR", receipt: `kg_${Date.now()}` }) });
   if (!response.ok) throw new HTTPError(502, "Unable to create payment order.");
   const razorpay = await response.json();
@@ -189,14 +220,18 @@ app.post("/api/payments/razorpay/order", async (c) => {
 });
 app.post("/api/payments/razorpay/verify", async (c) => {
   const data = await body(c);
+  if (![data.razorpay_order_id,data.razorpay_payment_id,data.razorpay_signature].every((value) => typeof value === "string" && value.length >= 8 && value.length <= 200)) {
+    throw new HTTPError(400, "Payment verification payload is invalid.", "invalid_payment_payload");
+  }
   const expected = await hmac(c.env.RAZORPAY_KEY_SECRET, `${data.razorpay_order_id}|${data.razorpay_payment_id}`);
   if (!safeEqual(expected, data.razorpay_signature || "")) throw new HTTPError(403, "Payment verification failed.");
+  const completed = await c.env.DB.prepare("SELECT o.id,o.order_number,o.status,o.total_paise FROM processed_payments p JOIN orders o ON o.id=p.order_id WHERE p.payment_order_id=?1 AND p.payment_id=?2").bind(data.razorpay_order_id,data.razorpay_payment_id).first();
+  if (completed) return c.json({ id: completed.id, orderNumber: completed.order_number, status: completed.status, totalPaise: completed.total_paise, idempotent: true });
   const intent = await c.env.DB.prepare("SELECT value_json FROM settings WHERE key=?1").bind(`payment_intent:${data.razorpay_order_id}`).first();
   if (!intent) throw new HTTPError(404, "Payment intent not found.");
   const stored = JSON.parse(intent.value_json);
   if (stored.expiresAt < Date.now()) throw new HTTPError(400, "Payment intent expired.");
-  const order = await persistOrder(c.env, stored.payload, stored.checkout, stored.userId, { method: "razorpay", status: "paid", orderId: data.razorpay_order_id, paymentId: data.razorpay_payment_id });
-  await c.env.DB.prepare("DELETE FROM settings WHERE key=?1").bind(`payment_intent:${data.razorpay_order_id}`).run();
+  const order = await persistOrder(c.env, stored.payload, stored.checkout, stored.userId, { method: "razorpay", status: "paid", orderId: data.razorpay_order_id, paymentId: data.razorpay_payment_id, intentKey: `payment_intent:${data.razorpay_order_id}` });
   return c.json(order);
 });
 
@@ -213,17 +248,27 @@ app.get("/api/orders/:id", async (c) => {
 });
 app.post("/api/orders/:id/cancel", async (c) => {
   const user = await requireUser(c);
-  const result = await c.env.DB.prepare("UPDATE orders SET status='cancelled',updated_at=CURRENT_TIMESTAMP WHERE id=?1 AND user_id=?2 AND status IN ('pending','confirmed')").bind(c.req.param("id"), user.id).run();
-  if (!result.meta.changes) throw new HTTPError(409, "Order can no longer be cancelled.");
-  await c.env.DB.prepare("INSERT INTO order_status_history(id,order_id,status,note) VALUES(?1,?2,'cancelled','Cancelled by customer')").bind(id(), c.req.param("id")).run();
+  const [orderResult, itemResult] = await c.env.DB.batch([
+    c.env.DB.prepare("SELECT id,status FROM orders WHERE id=?1 AND user_id=?2").bind(c.req.param("id"),user.id),
+    c.env.DB.prepare("SELECT variant_id,quantity FROM order_items WHERE order_id=?1").bind(c.req.param("id")),
+  ]);
+  const order = orderResult.results[0];
+  if (!order || !["pending","confirmed"].includes(order.status)) throw new HTTPError(409, "Order can no longer be cancelled.", "order_state_conflict");
+  const statements = [
+    c.env.DB.prepare("INSERT INTO order_transitions(id,order_id,from_status,to_status,note,actor_user_id) VALUES(?1,?2,?3,'cancelled','Cancelled by customer',?4)").bind(id(),order.id,order.status,user.id),
+    ...itemResult.results.map((item) => c.env.DB.prepare("INSERT INTO inventory_mutations(id,variant_id,mutation_type,quantity,reason,reference_id,actor_user_id) VALUES(?1,?2,'delta',?3,'order_cancel',?4,?5)").bind(id(),item.variant_id,item.quantity,order.id,user.id)),
+  ];
+  await c.env.DB.batch(statements);
   return c.json({ ok: true });
 });
 app.post("/api/orders/:id/return", async (c) => {
   const user = await requireUser(c); const data = await body(c);
+  const reason = String(data.reason || "").trim();
+  if (reason.length < 10 || reason.length > 2000) throw new HTTPError(400, "Return reason must contain 10 to 2000 characters.", "invalid_return_reason");
   const order = await c.env.DB.prepare("SELECT id FROM orders WHERE id=?1 AND user_id=?2 AND status='delivered'").bind(c.req.param("id"), user.id).first();
   if (!order) throw new HTTPError(409, "Only delivered orders can be returned.");
   const returnId = id();
-  await c.env.DB.prepare("INSERT INTO returns(id,order_id,user_id,reason) VALUES(?1,?2,?3,?4)").bind(returnId, order.id, user.id, data.reason).run();
+  await c.env.DB.prepare("INSERT INTO returns(id,order_id,user_id,reason) VALUES(?1,?2,?3,?4)").bind(returnId, order.id, user.id, reason).run();
   return c.json({ id: returnId, status: "pending" }, 201);
 });
 app.get("/api/orders/:id/invoice", async (c) => {
@@ -231,6 +276,7 @@ app.get("/api/orders/:id/invoice", async (c) => {
   const order = await c.env.DB.prepare("SELECT invoice_key,user_id FROM orders WHERE id=?1").bind(c.req.param("id")).first();
   if (!order?.invoice_key || (order.user_id !== user.id && !ADMIN_ROLES.has(user.role))) throw new HTTPError(404, "Invoice not found.");
   const object = await c.env.MEDIA.get(order.invoice_key);
+  if (!object?.body) throw new HTTPError(404, "Stored invoice not found.", "invoice_object_missing");
   return new Response(object.body, { headers: { "Content-Type": "application/json", "Content-Disposition": `attachment; filename="${c.req.param("id")}-invoice.json"` } });
 });
 
@@ -240,8 +286,8 @@ app.get("/api/media/*", async (c) => {
   if (!object) throw new HTTPError(404, "Media not found.");
   if (!object.body) return new Response(null, { status: 304, headers: { ETag: object.httpEtag } });
   const contentType = object.httpMetadata?.contentType || "application/octet-stream";
-  const headers = { "Content-Type": contentType, "Cache-Control": object.httpMetadata?.cacheControl || "public,max-age=3600", ETag: object.httpEtag };
-  if (contentType === "image/svg+xml") headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'";
+  const headers = { "Content-Type": contentType, "Cache-Control": object.httpMetadata?.cacheControl || "public,max-age=3600", ETag: object.httpEtag, "Cross-Origin-Resource-Policy": "same-site" };
+  if (contentType === "image/svg+xml") headers["Content-Security-Policy"] = "sandbox; default-src 'none'; img-src 'none'; style-src 'none'";
   return new Response(object.body, { headers });
 });
 app.post("/api/analytics/events", async (c) => {
@@ -254,7 +300,7 @@ app.get("/api/catalog", async (c) => {
   const [categories, products, variants] = await c.env.DB.batch([
     c.env.DB.prepare("SELECT * FROM categories WHERE active=1 ORDER BY sort_order,name"),
     c.env.DB.prepare("SELECT p.*,c.slug category_slug,(SELECT ROUND(AVG(r.rating),1) FROM reviews r WHERE r.product_id=p.id AND r.status='published') rating,(SELECT COUNT(*) FROM reviews r WHERE r.product_id=p.id AND r.status='published') review_count FROM products p JOIN categories c ON c.id=p.category_id WHERE p.active=1 AND p.archived=0 AND p.status='published' ORDER BY p.featured DESC,p.created_at DESC"),
-    c.env.DB.prepare("SELECT * FROM product_variants WHERE active=1 ORDER BY is_default DESC,created_at"),
+    c.env.DB.prepare("SELECT * FROM product_variants WHERE active=1 AND archived=0 ORDER BY is_default DESC,created_at"),
   ]);
   const variantsByProduct = Object.groupBy(variants.results, (variant) => variant.product_id);
   return c.json({ categories: categories.results, products: products.results.map((product) => ({ ...product, variants: variantsByProduct[product.id] || [] })) });
@@ -282,38 +328,36 @@ const cmsUser = async (c) => {
   if (!assigned || !ADMIN_ROLES.has(assigned.role)) throw new HTTPError(403, "You do not have administrator permissions.");
   return { ...user, role: assigned.role };
 };
-const canAccess = (role, path, method) => {
+export const canAccess = (role, path, method) => {
   if (!ADMIN_ROLES.has(role)) return false;
   if (role === "SUPER_ADMIN") return true;
   return !path.includes("/permissions") && !(method === "DELETE" && path.includes("/customers"));
 };
-const audit = (c, action, resourceType, resourceId, details = {}) => c.env.DB.prepare("INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json,ip_address) VALUES(?1,?2,?3,?4,?5,?6,?7)").bind(id(), c.get("admin").id, action, resourceType, resourceId || null, json(details), c.req.header("CF-Connecting-IP") || null).run();
-const MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/svg+xml", "application/pdf"]);
+const auditStatement = (c, action, resourceType, resourceId, details = {}) => {
+  const context = {
+    ...sanitizeAuditDetails(details),
+    requestId: c.get("requestId"),
+    method: c.req.method,
+    path: c.req.path,
+    userAgent: String(c.req.header("User-Agent") || "").slice(0, 300),
+  };
+  return c.env.DB.prepare("INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json,ip_address) VALUES(?1,?2,?3,?4,?5,?6,?7)")
+    .bind(id(), c.get("admin")?.id || null, action, resourceType, resourceId || null, json(context), c.req.header("CF-Connecting-IP") || null);
+};
+const audit = (c, action, resourceType, resourceId, details = {}) =>
+  auditStatement(c, action, resourceType, resourceId, details).run();
 const MEDIA_FOLDERS = new Set(["products", "categories", "banners", "cms", "homepage", "blog", "seo", "general"]);
 const mediaFolder = (value) => {
   const folder = String(value || "general").trim().toLowerCase();
   return MEDIA_FOLDERS.has(folder) ? folder : "general";
 };
-const mediaExtension = (file) => {
-  const fromName = file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const defaults = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/svg+xml": "svg", "application/pdf": "pdf" };
-  return fromName || defaults[file.type] || "bin";
-};
-const assertMediaFile = (file, maxSize = 12_000_000) => {
-  if (!(file instanceof File) || !MEDIA_TYPES.has(file.type) || file.size > maxSize) {
-    throw new HTTPError(400, "Upload a JPG, JPEG, PNG, WEBP, SVG or PDF file under 12 MB.");
+const isMediaLibraryUrl = (c, value) => {
+  try {
+    const mediaUrl = new URL(String(value || ""), c.req.url);
+    return mediaUrl.origin === new URL(c.req.url).origin && mediaUrl.pathname.startsWith("/api/media/");
+  } catch {
+    return false;
   }
-};
-const assertMediaSignature = (file, bytes) => {
-  const head = new Uint8Array(bytes.slice(0, 16));
-  const ascii = new TextDecoder().decode(bytes.slice(0, Math.min(bytes.byteLength, 4096))).trimStart();
-  const valid = file.type === "image/jpeg" ? head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff
-    : file.type === "image/png" ? head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47
-      : file.type === "image/webp" ? ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP"
-        : file.type === "application/pdf" ? ascii.startsWith("%PDF-")
-          : file.type === "image/svg+xml" ? /^(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(ascii) && !/<script|on[a-z]+\s*=|javascript\s*:/i.test(ascii)
-            : false;
-  if (!valid) throw new HTTPError(400, "The file contents do not match the selected media type or contain unsafe SVG markup.");
 };
 const usageExpression = `(SELECT COUNT(*) FROM product_media pm WHERE pm.media_id=m.id)
   +(SELECT COUNT(*) FROM packaging_assets pa WHERE pa.media_id=m.id)
@@ -348,10 +392,18 @@ const mediaUsage = async (c, asset) => {
 };
 
 app.use("/api/admin/*", async (c, next) => {
+  await enforceRateLimit(c, { scope: "admin-ip", limit: 300, windowSeconds: 60 });
   const admin = await cmsUser(c);
-  if (!canAccess(admin.role, c.req.path, c.req.method)) throw new HTTPError(403, "Your role cannot perform this action.");
-  if (admin.mustChangePassword && c.req.path !== "/api/admin/account/password") throw new HTTPError(403, "Password change required.");
   c.set("admin", admin);
+  if (!SAFE_METHODS.has(c.req.method)) await enforceRateLimit(c, { scope: "admin-user-write", limit: 120, windowSeconds: 60, identity: admin.id });
+  if (!canAccess(admin.role, c.req.path, c.req.method)) {
+    await audit(c, "authorization_denied", "security", null, { role: admin.role });
+    throw new HTTPError(403, "Your role cannot perform this action.", "authorization_denied");
+  }
+  if (admin.mustChangePassword && c.req.path !== "/api/admin/account/password") {
+    await audit(c, "password_change_required", "security", admin.id);
+    throw new HTTPError(403, "Password change required.", "password_change_required");
+  }
   await next();
 });
 app.patch("/api/admin/account/password", async (c) => {
@@ -372,8 +424,8 @@ app.get("/api/admin/dashboard", async (c) => {
     c.env.DB.prepare("SELECT COUNT(*) value FROM products WHERE archived=0"),
     c.env.DB.prepare("SELECT COUNT(*) value FROM categories WHERE active=1"),
     c.env.DB.prepare("SELECT COUNT(*) value FROM users WHERE role='customer'"),
-    c.env.DB.prepare("SELECT COALESCE(SUM(stock),0) value FROM product_variants WHERE active=1"),
-    c.env.DB.prepare("SELECT COUNT(*) value FROM product_variants WHERE stock<=low_stock_threshold"),
+    c.env.DB.prepare("SELECT COALESCE(SUM(stock),0) value FROM product_variants WHERE active=1 AND archived=0"),
+    c.env.DB.prepare("SELECT COUNT(*) value FROM product_variants WHERE archived=0 AND stock<=low_stock_threshold"),
     c.env.DB.prepare("SELECT COUNT(*) value FROM orders WHERE date(created_at)=date('now')"),
     c.env.DB.prepare("SELECT id,order_number,customer_name,status,total_paise,created_at FROM orders ORDER BY created_at DESC LIMIT 6"),
     c.env.DB.prepare("SELECT strftime('%Y-%m',created_at) month,COUNT(*) orders,COALESCE(SUM(total_paise),0) revenue_paise FROM orders GROUP BY month ORDER BY month DESC LIMIT 12"),
@@ -455,11 +507,12 @@ app.patch("/api/admin/media/:id", async (c) => {
 app.get("/api/admin/:resource", async (c) => {
   const resource = c.req.param("resource");
   const queries = {
-    products: "SELECT p.*,c.name category_name,(SELECT COUNT(*) FROM product_variants v WHERE v.product_id=p.id) variant_count,(SELECT COALESCE(SUM(stock),0) FROM product_variants v WHERE v.product_id=p.id) stock FROM products p JOIN categories c ON c.id=p.category_id ORDER BY p.archived,p.updated_at DESC",
+    products: "SELECT p.*,c.name category_name,(SELECT COUNT(*) FROM product_variants v WHERE v.product_id=p.id AND v.archived=0) variant_count,(SELECT COALESCE(SUM(stock),0) FROM product_variants v WHERE v.product_id=p.id AND v.archived=0) stock FROM products p JOIN categories c ON c.id=p.category_id ORDER BY p.archived,p.updated_at DESC",
     categories: "SELECT * FROM categories ORDER BY sort_order,name",
     orders: "SELECT * FROM orders ORDER BY created_at DESC LIMIT 250",
     customers: "SELECT u.id,u.email,u.name,u.mobile,COALESCE(up.role,u.role) role,u.created_at,(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) orders_count,(SELECT COALESCE(SUM(total_paise),0) FROM orders o WHERE o.user_id=u.id) lifetime_value_paise FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id ORDER BY u.created_at DESC LIMIT 500",
-    inventory: "SELECT v.*,p.name product_name FROM product_variants v JOIN products p ON p.id=v.product_id ORDER BY v.stock",
+    users: "SELECT u.id,u.email,u.name,u.mobile,COALESCE(up.role,u.role) role,u.created_at,(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) orders_count,(SELECT COALESCE(SUM(total_paise),0) FROM orders o WHERE o.user_id=u.id) lifetime_value_paise FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id ORDER BY u.created_at DESC LIMIT 500",
+    inventory: "SELECT v.*,p.name product_name FROM product_variants v JOIN products p ON p.id=v.product_id WHERE v.archived=0 AND p.archived=0 ORDER BY v.stock",
     coupons: "SELECT * FROM coupons ORDER BY created_at DESC",
     reviews: "SELECT r.*,p.name product_name,u.name customer_name FROM reviews r JOIN products p ON p.id=r.product_id JOIN users u ON u.id=r.user_id ORDER BY r.created_at DESC",
     banners: "SELECT * FROM banners ORDER BY sort_order,created_at DESC",
@@ -487,32 +540,32 @@ app.get("/api/admin/content-system/:resource", async (c) => {
   return c.json((await c.env.DB.prepare(query).all()).results);
 });
 app.post("/api/admin/content", async (c) => {
-  const data = await body(c); const entryId = data.id || id(); const existing = data.id ? await c.env.DB.prepare("SELECT * FROM cms_entries WHERE id=?1").bind(data.id).first() : null;
-  if (!data.entryType || !data.slug || !data.title) throw new HTTPError(400, "Content type, slug and title are required.");
+  const data = validateCmsEntry(await body(c)); const entryId = data.id || id(); const existing = data.id ? await c.env.DB.prepare("SELECT * FROM cms_entries WHERE id=?1").bind(data.id).first() : null;
+  if (data.id && !existing) throw new HTTPError(404, "Content entry not found.", "content_not_found");
   const version = Number(existing?.current_version || 0) + 1;
-  const contentJson = typeof data.content === "string" ? data.content : json(data.content || {});
-  const seoJson = typeof data.seo === "string" ? data.seo : json(data.seo || {});
-  const snapshot = json({ entryType:data.entryType,slug:data.slug,title:data.title,excerpt:data.excerpt||null,content:JSON.parse(contentJson),seo:JSON.parse(seoJson),status:data.status||"draft",publishAt:data.publishAt||null,expiresAt:data.expiresAt||null,visibility:data.visibility||"sitewide",parentId:data.parentId||null,sortOrder:Number(data.sortOrder)||0 });
+  const contentJson = json(data.content);
+  const seoJson = json(data.seo);
+  const snapshot = json({ entryType:data.entryType,slug:data.slug,title:data.title,excerpt:data.excerpt,content:data.content,seo:data.seo,status:data.status,publishAt:data.publishAt,expiresAt:data.expiresAt,visibility:data.visibility,parentId:data.parentId,sortOrder:data.sortOrder });
   await c.env.DB.batch([
     c.env.DB.prepare(`INSERT INTO cms_entries(id,entry_type,slug,title,excerpt,content_json,seo_json,status,publish_at,expires_at,visibility,parent_id,sort_order,current_version,created_by,updated_by)
       VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15)
       ON CONFLICT(id) DO UPDATE SET entry_type=excluded.entry_type,slug=excluded.slug,title=excluded.title,excerpt=excluded.excerpt,content_json=excluded.content_json,seo_json=excluded.seo_json,status=excluded.status,publish_at=excluded.publish_at,expires_at=excluded.expires_at,visibility=excluded.visibility,parent_id=excluded.parent_id,sort_order=excluded.sort_order,current_version=excluded.current_version,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`)
-      .bind(entryId,data.entryType,data.slug,data.title,data.excerpt||null,contentJson,seoJson,data.status||"draft",data.publishAt||null,data.expiresAt||null,data.visibility||"sitewide",data.parentId||null,Number(data.sortOrder)||0,version,c.get("admin").id),
-    c.env.DB.prepare("INSERT INTO cms_versions(id,entry_id,version,snapshot_json,change_note,created_by) VALUES(?1,?2,?3,?4,?5,?6)").bind(id(),entryId,version,snapshot,data.changeNote||null,c.get("admin").id),
+      .bind(entryId,data.entryType,data.slug,data.title,data.excerpt,contentJson,seoJson,data.status,data.publishAt,data.expiresAt,data.visibility,data.parentId,data.sortOrder,version,c.get("admin").id),
+    c.env.DB.prepare("INSERT INTO cms_versions(id,entry_id,version,snapshot_json,change_note,created_by) VALUES(?1,?2,?3,?4,?5,?6)").bind(id(),entryId,version,snapshot,data.changeNote,c.get("admin").id),
+    auditStatement(c, existing ? "updated" : "created", "content", entryId, { entryType:data.entryType,version }),
   ]);
-  await audit(c, existing ? "updated" : "created", "content", entryId, { entryType:data.entryType,version });
   return c.json({id:entryId,version});
 });
 app.post("/api/admin/content/:id/rollback/:version", async (c) => {
   const record = await c.env.DB.prepare("SELECT snapshot_json FROM cms_versions WHERE entry_id=?1 AND version=?2").bind(c.req.param("id"),Number(c.req.param("version"))).first();
   if (!record) throw new HTTPError(404,"Version not found.");
-  const snapshot = JSON.parse(record.snapshot_json); const current = await c.env.DB.prepare("SELECT current_version FROM cms_entries WHERE id=?1").bind(c.req.param("id")).first();
+  const snapshot = validateCmsEntry(JSON.parse(record.snapshot_json)); const current = await c.env.DB.prepare("SELECT current_version FROM cms_entries WHERE id=?1").bind(c.req.param("id")).first();
   const nextVersion = Number(current.current_version)+1;
   await c.env.DB.batch([
     c.env.DB.prepare("UPDATE cms_entries SET entry_type=?1,slug=?2,title=?3,excerpt=?4,content_json=?5,seo_json=?6,status=?7,publish_at=?8,expires_at=?9,visibility=?10,parent_id=?11,sort_order=?12,current_version=?13,updated_by=?14,updated_at=CURRENT_TIMESTAMP WHERE id=?15").bind(snapshot.entryType,snapshot.slug,snapshot.title,snapshot.excerpt||null,json(snapshot.content||{}),json(snapshot.seo||{}),snapshot.status||"draft",snapshot.publishAt||null,snapshot.expiresAt||null,snapshot.visibility||"sitewide",snapshot.parentId||null,Number(snapshot.sortOrder)||0,nextVersion,c.get("admin").id,c.req.param("id")),
     c.env.DB.prepare("INSERT INTO cms_versions(id,entry_id,version,snapshot_json,change_note,created_by) VALUES(?1,?2,?3,?4,?5,?6)").bind(id(),c.req.param("id"),nextVersion,record.snapshot_json,`Rollback to version ${c.req.param("version")}`,c.get("admin").id),
+    auditStatement(c,"rolled_back","content",c.req.param("id"),{fromVersion:c.req.param("version"),newVersion:nextVersion}),
   ]);
-  await audit(c,"rolled_back","content",c.req.param("id"),{fromVersion:c.req.param("version"),newVersion:nextVersion});
   return c.json({ok:true,version:nextVersion});
 });
 app.patch("/api/admin/content/reorder", async (c) => {
@@ -522,12 +575,17 @@ app.patch("/api/admin/content/reorder", async (c) => {
   return c.json({updated:statements.length});
 });
 app.delete("/api/admin/content/:id", async (c) => {
-  await c.env.DB.prepare("DELETE FROM cms_entries WHERE id=?1").bind(c.req.param("id")).run();
-  await audit(c,"deleted","content",c.req.param("id"));
+  const entry = await c.env.DB.prepare("SELECT id FROM cms_entries WHERE id=?1").bind(c.req.param("id")).first();
+  if (!entry) throw new HTTPError(404, "Content entry not found.", "content_not_found");
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM cms_entries WHERE id=?1").bind(entry.id),
+    auditStatement(c,"deleted","content",entry.id),
+  ]);
   return c.json({ok:true});
 });
 app.post("/api/admin/content-system/menus", async (c) => {
   const data=await body(c); const menuId=data.id||id();
+  assertSafeStructuredValue(data, "Menu item", 25_000);
   await c.env.DB.prepare("INSERT INTO menu_items(id,menu_location,parent_id,label,url,description,media_id,mega_menu,enabled,sort_order) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET menu_location=excluded.menu_location,parent_id=excluded.parent_id,label=excluded.label,url=excluded.url,description=excluded.description,media_id=excluded.media_id,mega_menu=excluded.mega_menu,enabled=excluded.enabled,sort_order=excluded.sort_order,updated_at=CURRENT_TIMESTAMP").bind(menuId,data.menuLocation||"main",data.parentId||null,data.label,data.url,data.description||null,data.mediaId||null,data.megaMenu?1:0,data.enabled===false?0:1,Number(data.sortOrder)||0).run();
   await audit(c,data.id?"updated":"created","menu",menuId,{label:data.label});
   return c.json({id:menuId});
@@ -545,6 +603,7 @@ app.patch("/api/admin/content-system/menus/reorder", async (c) => {
 });
 app.put("/api/admin/content-system/emails/:id", async (c) => {
   const data=await body(c);
+  assertSafeStructuredValue({ name: data.name, subject: data.subject, preheader: data.preheader, htmlContent: data.htmlContent, textContent: data.textContent }, "Email template", 250_000);
   await c.env.DB.prepare("UPDATE email_templates SET name=?1,subject=?2,preheader=?3,html_content=?4,text_content=?5,enabled=?6,current_version=current_version+1,updated_by=?7,updated_at=CURRENT_TIMESTAMP WHERE id=?8").bind(data.name,data.subject,data.preheader||null,data.htmlContent,data.textContent||null,data.enabled===false?0:1,c.get("admin").id,c.req.param("id")).run();
   await audit(c,"updated","email_template",c.req.param("id"),{name:data.name});
   return c.json({ok:true});
@@ -552,7 +611,7 @@ app.put("/api/admin/content-system/emails/:id", async (c) => {
 app.get("/api/admin/products/:id", async (c) => {
   const [product, variants, media, packaging] = await c.env.DB.batch([
     c.env.DB.prepare("SELECT * FROM products WHERE id=?1").bind(c.req.param("id")),
-    c.env.DB.prepare("SELECT * FROM product_variants WHERE product_id=?1 ORDER BY is_default DESC,created_at").bind(c.req.param("id")),
+    c.env.DB.prepare("SELECT * FROM product_variants WHERE product_id=?1 AND archived=0 ORDER BY is_default DESC,created_at").bind(c.req.param("id")),
     c.env.DB.prepare("SELECT pm.*,m.url,m.file_name,m.alt_text FROM product_media pm JOIN media_assets m ON m.id=pm.media_id WHERE pm.product_id=?1 ORDER BY pm.sort_order").bind(c.req.param("id")),
     c.env.DB.prepare("SELECT pa.*,m.url,m.file_name FROM packaging_assets pa JOIN media_assets m ON m.id=pa.media_id WHERE pa.product_id=?1").bind(c.req.param("id")),
   ]);
@@ -560,56 +619,107 @@ app.get("/api/admin/products/:id", async (c) => {
   return c.json({ ...product.results[0], variants: variants.results, media: media.results, packaging: packaging.results });
 });
 app.post("/api/admin/products", async (c) => {
-  const admin = c.get("admin"); const data = await body(c); const productId = data.id || id();
-  if (!data.name || !data.slug || !data.categoryId) throw new HTTPError(400, "Name, slug and category are required.");
-  await c.env.DB.prepare(`INSERT INTO products(id,category_id,name,slug,brand,subcategory,description,benefits,ingredients,nutrition,storage,shelf_life,country_of_origin,hsn_code,gst_basis_points,barcode,image_url,detail_image_url,seo_title,seo_description,featured,best_seller,new_arrival,active,status,archived)
+  const admin = c.get("admin"); const data = validateProduct(await body(c)); const productId = data.id || id();
+  if (data.id) {
+    const existingProduct = await c.env.DB.prepare("SELECT id FROM products WHERE id=?1").bind(productId).first();
+    if (!existingProduct) throw new HTTPError(404, "Product not found.", "product_not_found");
+  }
+  const category = await c.env.DB.prepare("SELECT id FROM categories WHERE id=?1").bind(data.categoryId).first();
+  if (!category) throw new HTTPError(400, "Selected category does not exist.", "invalid_category");
+  const existingVariants = (await c.env.DB.prepare("SELECT id,sku,stock,archived FROM product_variants WHERE product_id=?1").bind(productId).all()).results;
+  const variantsById = new Map(existingVariants.map((variant) => [variant.id, variant]));
+  const archivedBySku = new Map(existingVariants.filter((variant) => variant.archived).map((variant) => [variant.sku.toLowerCase(), variant]));
+  const normalizedVariants = data.variants.map((variant) => {
+    if (variant.id) {
+      const current = variantsById.get(variant.id);
+      if (!current) throw new HTTPError(409, "A variant is missing or belongs to another product.", "variant_ownership_conflict");
+      return { ...variant, id: current.id, previousStock: Number(current.stock), existing: true };
+    }
+    const archived = archivedBySku.get(variant.sku.toLowerCase());
+    return archived
+      ? { ...variant, id: archived.id, previousStock: Number(archived.stock), existing: true }
+      : { ...variant, id: id(), previousStock: null, existing: false };
+  });
+  if (new Set(normalizedVariants.map((variant) => variant.id)).size !== normalizedVariants.length) {
+    throw new HTTPError(400, "A product variant may only appear once.", "duplicate_variant");
+  }
+  if (data.media.length) {
+    const media = await c.env.DB.batch(data.media.map((item) => c.env.DB.prepare("SELECT id FROM media_assets WHERE id=?1").bind(item.mediaId)));
+    if (media.some((result) => !result.results[0])) throw new HTTPError(400, "One or more selected media assets do not exist.", "invalid_media_reference");
+  }
+  const statements = [c.env.DB.prepare(`INSERT INTO products(id,category_id,name,slug,brand,subcategory,description,benefits,ingredients,nutrition,storage,shelf_life,country_of_origin,hsn_code,gst_basis_points,barcode,image_url,detail_image_url,seo_title,seo_description,featured,best_seller,new_arrival,active,status,archived)
     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)
     ON CONFLICT(id) DO UPDATE SET category_id=excluded.category_id,name=excluded.name,slug=excluded.slug,brand=excluded.brand,subcategory=excluded.subcategory,description=excluded.description,benefits=excluded.benefits,ingredients=excluded.ingredients,nutrition=excluded.nutrition,storage=excluded.storage,shelf_life=excluded.shelf_life,country_of_origin=excluded.country_of_origin,hsn_code=excluded.hsn_code,gst_basis_points=excluded.gst_basis_points,barcode=excluded.barcode,image_url=excluded.image_url,detail_image_url=excluded.detail_image_url,seo_title=excluded.seo_title,seo_description=excluded.seo_description,featured=excluded.featured,best_seller=excluded.best_seller,new_arrival=excluded.new_arrival,active=excluded.active,status=excluded.status,archived=excluded.archived,updated_at=CURRENT_TIMESTAMP`)
-    .bind(productId,data.categoryId,data.name,data.slug,data.brand||"Kisan Gaurav",data.subcategory||null,data.description||null,data.benefits||null,data.ingredients||null,data.nutrition||null,data.storage||null,data.shelfLife||null,data.countryOfOrigin||"India",data.hsnCode||null,Number(data.gstBasisPoints)||500,data.barcode||null,data.imageUrl||null,data.detailImageUrl||null,data.seoTitle||null,data.seoDescription||null,data.featured?1:0,data.bestSeller?1:0,data.newArrival?1:0,data.active===false?0:1,data.status||"draft",data.archived?1:0).run();
-  if (Array.isArray(data.variants)) for (const variant of data.variants) await c.env.DB.prepare(`INSERT INTO product_variants(id,product_id,name,sku,price_paise,compare_at_price_paise,mrp_paise,discount_basis_points,festival_price_paise,bulk_price_paise,wholesale_price_paise,stock,low_stock_threshold,weight_grams,is_default,active)
-    VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
-    ON CONFLICT(id) DO UPDATE SET name=excluded.name,sku=excluded.sku,price_paise=excluded.price_paise,compare_at_price_paise=excluded.compare_at_price_paise,mrp_paise=excluded.mrp_paise,discount_basis_points=excluded.discount_basis_points,festival_price_paise=excluded.festival_price_paise,bulk_price_paise=excluded.bulk_price_paise,wholesale_price_paise=excluded.wholesale_price_paise,stock=excluded.stock,low_stock_threshold=excluded.low_stock_threshold,weight_grams=excluded.weight_grams,is_default=excluded.is_default,active=excluded.active,updated_at=CURRENT_TIMESTAMP`)
-    .bind(variant.id||id(),productId,variant.name,variant.sku,Number(variant.pricePaise)||0,variant.compareAtPricePaise||null,variant.mrpPaise||null,Number(variant.discountBasisPoints)||0,variant.festivalPricePaise||null,variant.bulkPricePaise||null,variant.wholesalePricePaise||null,Math.max(0,Number(variant.stock)||0),Math.max(0,Number(variant.lowStockThreshold)||5),variant.weightGrams||null,variant.isDefault?1:0,variant.active===false?0:1).run();
-  if (Array.isArray(data.media)) {
-    const validMedia = data.media.filter((item) => item.mediaId && ["hero","gallery","hover","lifestyle"].includes(item.mediaType || "gallery"));
-    await c.env.DB.batch([
-      c.env.DB.prepare("DELETE FROM product_media WHERE product_id=?1").bind(productId),
-      ...validMedia.map((item, index) => c.env.DB.prepare("INSERT INTO product_media(id,product_id,media_id,media_type,sort_order) VALUES(?1,?2,?3,?4,?5)").bind(id(),productId,item.mediaId,item.mediaType||"gallery",Number(item.sortOrder)||index*10)),
-    ]);
+    .bind(productId,data.categoryId,data.name,data.slug,data.brand,data.subcategory,data.description,data.benefits,data.ingredients,data.nutrition,data.storage,data.shelfLife,data.countryOfOrigin,data.hsnCode,data.gstBasisPoints,data.barcode,data.imageUrl,data.detailImageUrl,data.seoTitle,data.seoDescription,data.featured?1:0,data.bestSeller?1:0,data.newArrival?1:0,data.active===false?0:1,data.status,data.archived?1:0)];
+  const retainedIds = normalizedVariants.map((variant) => variant.id);
+  statements.push(retainedIds.length
+    ? c.env.DB.prepare(`UPDATE product_variants SET archived=1,active=0,is_default=0,updated_at=CURRENT_TIMESTAMP WHERE product_id=? AND id NOT IN (${retainedIds.map(() => "?").join(",")})`).bind(productId, ...retainedIds)
+    : c.env.DB.prepare("UPDATE product_variants SET archived=1,active=0,is_default=0,updated_at=CURRENT_TIMESTAMP WHERE product_id=?1").bind(productId));
+  for (const variant of normalizedVariants) {
+    statements.push(c.env.DB.prepare(`INSERT INTO product_variants(id,product_id,name,sku,price_paise,compare_at_price_paise,mrp_paise,discount_basis_points,festival_price_paise,bulk_price_paise,wholesale_price_paise,stock,low_stock_threshold,weight_grams,is_default,active,archived)
+      VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,0)
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name,sku=excluded.sku,price_paise=excluded.price_paise,compare_at_price_paise=excluded.compare_at_price_paise,mrp_paise=excluded.mrp_paise,discount_basis_points=excluded.discount_basis_points,festival_price_paise=excluded.festival_price_paise,bulk_price_paise=excluded.bulk_price_paise,wholesale_price_paise=excluded.wholesale_price_paise,low_stock_threshold=excluded.low_stock_threshold,weight_grams=excluded.weight_grams,is_default=excluded.is_default,active=excluded.active,archived=0,updated_at=CURRENT_TIMESTAMP`)
+      .bind(variant.id,productId,variant.name,variant.sku,variant.pricePaise,variant.compareAtPricePaise,variant.mrpPaise,variant.discountBasisPoints,variant.festivalPricePaise,variant.bulkPricePaise,variant.wholesalePricePaise,variant.stock,variant.lowStockThreshold,variant.weightGrams,variant.isDefault?1:0,variant.active===false?0:1));
+    if (variant.existing && variant.stock !== variant.previousStock) {
+      statements.push(c.env.DB.prepare("INSERT INTO inventory_mutations(id,variant_id,mutation_type,expected_stock,quantity,reason,reference_id,actor_user_id) VALUES(?1,?2,'set',?3,?4,'product_save',?5,?6)")
+        .bind(id(),variant.id,variant.previousStock,variant.stock,productId,admin.id));
+    }
   }
-  await Promise.all([audit(c, data.id ? "updated" : "created", "product", productId, { name: data.name }), c.env.DB.prepare("INSERT INTO analytics_events(id,user_id,event_name,properties_json) VALUES(?1,?2,'admin_product_save',?3)").bind(id(), admin.id, json({ productId })).run()]);
-  return c.json({ id: productId });
+  statements.push(c.env.DB.prepare("DELETE FROM product_media WHERE product_id=?1").bind(productId));
+  statements.push(...data.media.map((item) => c.env.DB.prepare("INSERT INTO product_media(id,product_id,media_id,media_type,sort_order) VALUES(?1,?2,?3,?4,?5)").bind(id(),productId,item.mediaId,item.mediaType,item.sortOrder)));
+  statements.push(
+    auditStatement(c, data.id ? "updated" : "created", "product", productId, { name: data.name, variants: normalizedVariants.length, media: data.media.length }),
+    c.env.DB.prepare("INSERT INTO analytics_events(id,user_id,event_name,properties_json) VALUES(?1,?2,'admin_product_save',?3)").bind(id(), admin.id, json({ productId })),
+  );
+  await c.env.DB.batch(statements);
+  return c.json({ id: productId, variantIds: normalizedVariants.map((variant) => variant.id) }, data.id ? 200 : 201);
 });
 app.post("/api/admin/products/:id/duplicate", async (c) => {
-  const source = await c.env.DB.prepare("SELECT * FROM products WHERE id=?1").bind(c.req.param("id")).first();
+  const [productResult, variantResult, mediaResult] = await c.env.DB.batch([
+    c.env.DB.prepare("SELECT * FROM products WHERE id=?1").bind(c.req.param("id")),
+    c.env.DB.prepare("SELECT * FROM product_variants WHERE product_id=?1 AND archived=0").bind(c.req.param("id")),
+    c.env.DB.prepare("SELECT media_id,media_type,sort_order FROM product_media WHERE product_id=?1").bind(c.req.param("id")),
+  ]);
+  const source = productResult.results[0];
   if (!source) throw new HTTPError(404, "Product not found.");
   const productId = id(); const suffix = crypto.randomUUID().slice(0, 6);
-  await c.env.DB.prepare("INSERT INTO products(id,category_id,name,slug,brand,subcategory,description,benefits,ingredients,nutrition,storage,shelf_life,country_of_origin,hsn_code,gst_basis_points,barcode,image_url,detail_image_url,seo_title,seo_description,status,active) SELECT ?1,category_id,name||' (Copy)',slug||'-copy-'||?2,brand,subcategory,description,benefits,ingredients,nutrition,storage,shelf_life,country_of_origin,hsn_code,gst_basis_points,NULL,image_url,detail_image_url,seo_title,seo_description,'draft',0 FROM products WHERE id=?3").bind(productId,suffix,source.id).run();
-  const variants = (await c.env.DB.prepare("SELECT * FROM product_variants WHERE product_id=?1").bind(source.id).all()).results;
-  for (const variant of variants) await c.env.DB.prepare("INSERT INTO product_variants(id,product_id,name,sku,price_paise,compare_at_price_paise,mrp_paise,stock,low_stock_threshold,weight_grams,active) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0)").bind(id(),productId,variant.name,`${variant.sku}-COPY-${suffix}`,variant.price_paise,variant.compare_at_price_paise,variant.mrp_paise,variant.stock,variant.low_stock_threshold,variant.weight_grams).run();
-  await audit(c, "duplicated", "product", productId, { sourceId: source.id });
+  const statements = [
+    c.env.DB.prepare("INSERT INTO products(id,category_id,name,slug,brand,subcategory,description,benefits,ingredients,nutrition,storage,shelf_life,country_of_origin,hsn_code,gst_basis_points,barcode,image_url,detail_image_url,seo_title,seo_description,status,active) SELECT ?1,category_id,name||' (Copy)',slug||'-copy-'||?2,brand,subcategory,description,benefits,ingredients,nutrition,storage,shelf_life,country_of_origin,hsn_code,gst_basis_points,NULL,image_url,detail_image_url,seo_title,seo_description,'draft',0 FROM products WHERE id=?3").bind(productId,suffix,source.id),
+    ...variantResult.results.map((variant) => c.env.DB.prepare("INSERT INTO product_variants(id,product_id,name,sku,price_paise,compare_at_price_paise,mrp_paise,discount_basis_points,festival_price_paise,bulk_price_paise,wholesale_price_paise,stock,low_stock_threshold,weight_grams,is_default,active,archived) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,0,0)").bind(id(),productId,variant.name,`${variant.sku}-COPY-${suffix}`,variant.price_paise,variant.compare_at_price_paise,variant.mrp_paise,variant.discount_basis_points,variant.festival_price_paise,variant.bulk_price_paise,variant.wholesale_price_paise,variant.stock,variant.low_stock_threshold,variant.weight_grams,variant.is_default)),
+    ...mediaResult.results.map((media) => c.env.DB.prepare("INSERT INTO product_media(id,product_id,media_id,media_type,sort_order) VALUES(?1,?2,?3,?4,?5)").bind(id(),productId,media.media_id,media.media_type,media.sort_order)),
+    auditStatement(c, "duplicated", "product", productId, { sourceId: source.id }),
+  ];
+  await c.env.DB.batch(statements);
   return c.json({ id: productId }, 201);
 });
 app.post("/api/admin/categories", async (c) => {
-  const data = await body(c); const categoryId = data.id || id();
-  await c.env.DB.prepare(`INSERT INTO categories(id,name,slug,description,short_description,long_description,seo_title,seo_description,image_url,hero_image_url,banner_image_url,thumbnail_url,featured,homepage_visible,navigation_visible,active,sort_order)
+  const data = validateCategory(await body(c)); const categoryId = data.id || id();
+  if (data.id && !(await c.env.DB.prepare("SELECT id FROM categories WHERE id=?1").bind(categoryId).first())) throw new HTTPError(404, "Category not found.", "category_not_found");
+  await c.env.DB.batch([c.env.DB.prepare(`INSERT INTO categories(id,name,slug,description,short_description,long_description,seo_title,seo_description,image_url,hero_image_url,banner_image_url,thumbnail_url,featured,homepage_visible,navigation_visible,active,sort_order)
     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
     ON CONFLICT(id) DO UPDATE SET name=excluded.name,slug=excluded.slug,description=excluded.description,short_description=excluded.short_description,long_description=excluded.long_description,seo_title=excluded.seo_title,seo_description=excluded.seo_description,image_url=excluded.image_url,hero_image_url=excluded.hero_image_url,banner_image_url=excluded.banner_image_url,thumbnail_url=excluded.thumbnail_url,featured=excluded.featured,homepage_visible=excluded.homepage_visible,navigation_visible=excluded.navigation_visible,active=excluded.active,sort_order=excluded.sort_order,updated_at=CURRENT_TIMESTAMP`)
-    .bind(categoryId,data.name,data.slug,data.shortDescription||null,data.shortDescription||null,data.longDescription||null,data.seoTitle||null,data.seoDescription||null,data.thumbnailUrl||null,data.heroImageUrl||null,data.bannerImageUrl||null,data.thumbnailUrl||null,data.featured?1:0,data.homepageVisible===false?0:1,data.navigationVisible===false?0:1,data.active===false?0:1,Number(data.sortOrder)||0).run();
-  await audit(c, data.id ? "updated" : "created", "category", categoryId, { name: data.name });
+    .bind(categoryId,data.name,data.slug,data.description,data.shortDescription,data.longDescription,data.seoTitle,data.seoDescription,data.imageUrl||data.thumbnailUrl,data.heroImageUrl,data.bannerImageUrl,data.thumbnailUrl,data.featured?1:0,data.homepageVisible===false?0:1,data.navigationVisible===false?0:1,data.active===false?0:1,data.sortOrder),
+    auditStatement(c, data.id ? "updated" : "created", "category", categoryId, { name: data.name }),
+  ]);
   return c.json({ id: categoryId });
 });
 app.post("/api/admin/coupons", async (c) => {
-  const data=await body(c);const couponId=data.id||id();
-  if(!["percent","flat"].includes(data.type))throw new HTTPError(400,"Invalid coupon type.");
-  await c.env.DB.prepare("INSERT INTO coupons(id,code,type,value,minimum_order_paise,expires_at,usage_limit,enabled) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET code=excluded.code,type=excluded.type,value=excluded.value,minimum_order_paise=excluded.minimum_order_paise,expires_at=excluded.expires_at,usage_limit=excluded.usage_limit,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP").bind(couponId,String(data.code).toUpperCase(),data.type,data.value,data.minimumOrderPaise||0,data.expiresAt||null,data.usageLimit||null,data.enabled===false?0:1).run();
-  await audit(c, data.id ? "updated" : "created", "coupon", couponId, { code: data.code });
+  const data=validateCoupon(await body(c));const couponId=data.id||id();
+  if (data.id && !(await c.env.DB.prepare("SELECT id FROM coupons WHERE id=?1").bind(couponId).first())) throw new HTTPError(404, "Coupon not found.", "coupon_not_found");
+  await c.env.DB.batch([
+    c.env.DB.prepare("INSERT INTO coupons(id,code,type,value,minimum_order_paise,expires_at,usage_limit,enabled) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET code=excluded.code,type=excluded.type,value=excluded.value,minimum_order_paise=excluded.minimum_order_paise,expires_at=excluded.expires_at,usage_limit=excluded.usage_limit,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP").bind(couponId,data.code,data.type,data.value,data.minimumOrderPaise,data.expiresAt,data.usageLimit,data.enabled===false?0:1),
+    auditStatement(c, data.id ? "updated" : "created", "coupon", couponId, { code: data.code }),
+  ]);
   return c.json({id:couponId});
 });
 app.post("/api/admin/banners", async (c) => {
   const data=await body(c);const bannerId=data.id||id();
-  await c.env.DB.prepare("INSERT INTO banners(id,title,subtitle,image_url,link_url,starts_at,ends_at,active,sort_order,banner_type,device) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET title=excluded.title,subtitle=excluded.subtitle,image_url=excluded.image_url,link_url=excluded.link_url,starts_at=excluded.starts_at,ends_at=excluded.ends_at,active=excluded.active,sort_order=excluded.sort_order,banner_type=excluded.banner_type,device=excluded.device,updated_at=CURRENT_TIMESTAMP").bind(bannerId,data.title,data.subtitle||null,data.imageUrl,data.linkUrl||null,data.startsAt||null,data.endsAt||null,data.active===false?0:1,data.sortOrder||0,data.bannerType||"homepage",data.device||"both").run();
-  await audit(c, data.id ? "updated" : "created", "banner", bannerId, { title: data.title });
+  assertSafeStructuredValue(data, "Banner", 50_000);
+  if (!String(data.title || "").trim() || !isMediaLibraryUrl(c, data.imageUrl)) throw new HTTPError(400, "Banner title and a Media Library image are required.", "invalid_banner");
+  await c.env.DB.batch([
+    c.env.DB.prepare("INSERT INTO banners(id,title,subtitle,image_url,link_url,starts_at,ends_at,active,sort_order,banner_type,device) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET title=excluded.title,subtitle=excluded.subtitle,image_url=excluded.image_url,link_url=excluded.link_url,starts_at=excluded.starts_at,ends_at=excluded.ends_at,active=excluded.active,sort_order=excluded.sort_order,banner_type=excluded.banner_type,device=excluded.device,updated_at=CURRENT_TIMESTAMP").bind(bannerId,String(data.title).trim().slice(0,240),data.subtitle||null,data.imageUrl,data.linkUrl||null,data.startsAt||null,data.endsAt||null,data.active===false?0:1,Number(data.sortOrder)||0,data.bannerType||"homepage",data.device||"both"),
+    auditStatement(c, data.id ? "updated" : "created", "banner", bannerId, { title: data.title }),
+  ]);
   return c.json({id:bannerId});
 });
 app.patch("/api/admin/reviews/:id", async (c) => {
@@ -619,21 +729,31 @@ app.patch("/api/admin/reviews/:id", async (c) => {
   return c.json({ok:true});
 });
 app.put("/api/admin/settings/:key", async (c) => {
-  const data=await body(c);
-  await c.env.DB.prepare("INSERT INTO settings(key,value_json) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=CURRENT_TIMESTAMP").bind(c.req.param("key"),json(data)).run();
-  await audit(c, "updated", "setting", c.req.param("key"));
+  const data=validateSetting(c.req.param("key"),await body(c));
+  await c.env.DB.batch([
+    c.env.DB.prepare("INSERT INTO settings(key,value_json) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=CURRENT_TIMESTAMP").bind(data.key,json(data.value)),
+    auditStatement(c, "updated", "setting", data.key),
+  ]);
   return c.json({ok:true});
 });
 app.delete("/api/admin/products/:id", async (c) => {
-  await c.env.DB.prepare("UPDATE products SET archived=1,active=0,status='archived',updated_at=CURRENT_TIMESTAMP WHERE id=?1").bind(c.req.param("id")).run();
-  await audit(c, "archived", "product", c.req.param("id"));
+  const product = await c.env.DB.prepare("SELECT id FROM products WHERE id=?1").bind(c.req.param("id")).first();
+  if (!product) throw new HTTPError(404, "Product not found.", "product_not_found");
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE products SET archived=1,active=0,status='archived',updated_at=CURRENT_TIMESTAMP WHERE id=?1").bind(product.id),
+    auditStatement(c, "archived", "product", product.id),
+  ]);
   return c.json({ ok: true });
 });
 app.delete("/api/admin/categories/:id", async (c) => {
+  const category = await c.env.DB.prepare("SELECT id FROM categories WHERE id=?1").bind(c.req.param("id")).first();
+  if (!category) throw new HTTPError(404, "Category not found.", "category_not_found");
   const used = await c.env.DB.prepare("SELECT COUNT(*) count FROM products WHERE category_id=?1 AND archived=0").bind(c.req.param("id")).first();
   if (used.count) throw new HTTPError(409, "Move or archive products in this category first.");
-  await c.env.DB.prepare("DELETE FROM categories WHERE id=?1").bind(c.req.param("id")).run();
-  await audit(c, "deleted", "category", c.req.param("id"));
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM categories WHERE id=?1").bind(category.id),
+    auditStatement(c, "deleted", "category", category.id),
+  ]);
   return c.json({ ok: true });
 });
 app.patch("/api/admin/categories/reorder", async (c) => {
@@ -646,111 +766,235 @@ app.patch("/api/admin/categories/reorder", async (c) => {
 app.patch("/api/admin/orders/:id/status", async (c) => {
   const data = await body(c);
   if (!["pending","confirmed","packed","shipped","delivered","cancelled","returned","refunded"].includes(data.status)) throw new HTTPError(400, "Invalid order status.");
-  await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE orders SET status=?1,tracking_number=COALESCE(?2,tracking_number),updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(data.status, data.trackingNumber || null, c.req.param("id")),
-    c.env.DB.prepare("INSERT INTO order_status_history(id,order_id,status,note) VALUES(?1,?2,?3,?4)").bind(id(), c.req.param("id"), data.status, data.note || null),
+  const note = data.note == null ? null : String(data.note).trim().slice(0, 1000);
+  const trackingNumber = data.trackingNumber == null ? null : String(data.trackingNumber).trim().slice(0, 120);
+  const [orderResult, itemResult] = await c.env.DB.batch([
+    c.env.DB.prepare("SELECT id,status FROM orders WHERE id=?1").bind(c.req.param("id")),
+    c.env.DB.prepare("SELECT variant_id,quantity FROM order_items WHERE order_id=?1").bind(c.req.param("id")),
   ]);
-  await audit(c, "status_changed", "order", c.req.param("id"), { status: data.status });
+  const order = orderResult.results[0];
+  if (!order) throw new HTTPError(404, "Order not found.", "order_not_found");
+  if (order.status === data.status) {
+    if (trackingNumber) await c.env.DB.batch([
+      c.env.DB.prepare("UPDATE orders SET tracking_number=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2").bind(trackingNumber,order.id),
+      auditStatement(c, "tracking_updated", "order", order.id, { trackingNumber }),
+    ]);
+    return c.json({ ok: true, unchanged: true });
+  }
+  const transitionId = id();
+  const statements = [
+    c.env.DB.prepare("INSERT INTO order_transitions(id,order_id,from_status,to_status,note,tracking_number,actor_user_id) VALUES(?1,?2,?3,?4,?5,?6,?7)").bind(transitionId,order.id,order.status,data.status,note,trackingNumber,c.get("admin").id),
+  ];
+  if (data.status === "cancelled") {
+    statements.push(...itemResult.results.map((item) => c.env.DB.prepare("INSERT INTO inventory_mutations(id,variant_id,mutation_type,quantity,reason,reference_id,actor_user_id) VALUES(?1,?2,'delta',?3,'order_cancel',?4,?5)").bind(id(),item.variant_id,item.quantity,order.id,c.get("admin").id)));
+  }
+  statements.push(auditStatement(c, "status_changed", "order", order.id, { fromStatus: order.status, status: data.status }));
+  await c.env.DB.batch(statements);
   return c.json({ ok: true });
 });
 app.patch("/api/admin/inventory/bulk", async (c) => {
-  const admin = c.get("admin"); const data = await body(c); const statements = [];
-  for (const entry of data.items || []) {
-    statements.push(c.env.DB.prepare("UPDATE product_variants SET stock=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2").bind(Math.max(0, entry.stock), entry.variantId));
-    statements.push(c.env.DB.prepare("INSERT INTO inventory_history(id,variant_id,change_quantity,balance_after,reason,actor_user_id) VALUES(?1,?2,?3,?4,'bulk_update',?5)").bind(id(), entry.variantId, entry.change || 0, Math.max(0, entry.stock), admin.id));
+  const admin = c.get("admin"); const data = await body(c);
+  if (!Array.isArray(data.items) || data.items.length < 1 || data.items.length > 500) throw new HTTPError(400, "Inventory update must contain between 1 and 500 items.");
+  const normalized = [];
+  const seen = new Set();
+  for (const entry of data.items) {
+    const stock = Number(entry.stock);
+    const variantId = String(entry.variantId || "");
+    if (!variantId || seen.has(variantId) || !Number.isSafeInteger(stock) || stock < 0 || stock > 10_000_000) throw new HTTPError(400, "Inventory entry is invalid or duplicated.");
+    seen.add(variantId);
+    normalized.push({ variantId, stock });
   }
-  if (statements.length) await c.env.DB.batch(statements);
-  return c.json({ updated: (data.items || []).length });
+  const currentResults = await c.env.DB.batch(normalized.map((entry) => c.env.DB.prepare("SELECT id,stock FROM product_variants WHERE id=?1 AND archived=0").bind(entry.variantId)));
+  if (currentResults.some((result) => !result.results[0])) throw new HTTPError(404, "One or more product variants no longer exist.", "variant_not_available");
+  const statements = normalized.map((entry, index) => c.env.DB.prepare("INSERT INTO inventory_mutations(id,variant_id,mutation_type,expected_stock,quantity,reason,actor_user_id) VALUES(?1,?2,'set',?3,?4,'bulk_update',?5)")
+    .bind(id(),entry.variantId,Number(currentResults[index].results[0].stock),entry.stock,admin.id));
+  statements.push(auditStatement(c, "bulk_updated", "inventory", null, { count: normalized.length }));
+  await c.env.DB.batch(statements);
+  return c.json({ updated: normalized.length });
 });
 app.post("/api/admin/uploads", async (c) => {
   const form = await c.req.formData(); const file = form.get("file");
-  assertMediaFile(file);
   const folder = mediaFolder(form.get("folder"));
-  const extension = mediaExtension(file);
-  const key = `${folder}/${crypto.randomUUID()}.${extension}`;
-  const fileBytes = await file.arrayBuffer();
-  assertMediaSignature(file, fileBytes);
-  await c.env.MEDIA.put(key, fileBytes, { httpMetadata: { contentType: file.type, cacheControl: "public,max-age=300,must-revalidate" } });
+  const fileBytes = file instanceof File ? await file.arrayBuffer() : new ArrayBuffer(0);
+  const validated = validateMediaUpload(file, fileBytes);
+  const hash = await contentHash(fileBytes);
+  const duplicate = await c.env.DB.prepare("SELECT m.*,u.name uploaded_by_name FROM media_assets m LEFT JOIN users u ON u.id=m.created_by WHERE m.content_hash=?1").bind(hash).first();
+  if (duplicate) return c.json({ ...duplicate, duplicate: true, usage_count: (await mediaUsage(c, duplicate)).count });
+  const key = `${folder}/${crypto.randomUUID()}.${validated.extension}`;
   const thumbnail = form.get("thumbnail");
-  let thumbnailKey = null; let thumbnailUrl = null;
-  if (thumbnail instanceof File && thumbnail.type === "image/webp" && thumbnail.size <= 1_000_000) {
+  let thumbnailKey = null; let thumbnailUrl = null; let thumbnailBytes = null;
+  if (thumbnail instanceof File) {
+    thumbnailBytes = await thumbnail.arrayBuffer();
+    validateMediaUpload(thumbnail, thumbnailBytes, { profile: true, maxBytes: 1_000_000 });
+    if (thumbnail.type !== "image/webp") throw new HTTPError(400, "Generated thumbnail must be WEBP.", "invalid_thumbnail");
     thumbnailKey = `${folder}/thumbnails/${crypto.randomUUID()}.webp`;
-    await c.env.MEDIA.put(thumbnailKey, await thumbnail.arrayBuffer(), { httpMetadata: { contentType: "image/webp", cacheControl: "public,max-age=300,must-revalidate" } });
     thumbnailUrl = `${new URL(c.req.url).origin}/api/media/${thumbnailKey}`;
   }
   const mediaId = id(); const url = `${new URL(c.req.url).origin}/api/media/${key}`;
   const width = Math.max(0, Number.parseInt(String(form.get("width") || "0"), 10) || 0) || null;
   const height = Math.max(0, Number.parseInt(String(form.get("height") || "0"), 10) || 0) || null;
-  await c.env.DB.prepare("INSERT INTO media_assets(id,key,url,file_name,folder,mime_type,size_bytes,width,height,alt_text,thumbnail_key,thumbnail_url,created_by) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)").bind(mediaId,key,url,file.name,folder,file.type,file.size,width,height,String(form.get("altText")||"").trim()||null,thumbnailKey,thumbnailUrl,c.get("admin").id).run();
-  await audit(c, "uploaded", "media", mediaId, { fileName: file.name, key });
-  return c.json({ id: mediaId, key, url, fileName: file.name, file_name: file.name, folder, mime_type: file.type, size_bytes: file.size, width, height, alt_text: String(form.get("altText")||"").trim()||null, thumbnail_key: thumbnailKey, thumbnail_url: thumbnailUrl, usage_count: 0 }, 201);
+  const altText = String(form.get("altText")||"").trim().slice(0, 300)||null;
+  try {
+    await c.env.MEDIA.put(key, fileBytes, { httpMetadata: { contentType: file.type, cacheControl: "public,max-age=300,must-revalidate" } });
+    if (thumbnailBytes) await c.env.MEDIA.put(thumbnailKey, thumbnailBytes, { httpMetadata: { contentType: "image/webp", cacheControl: "public,max-age=300,must-revalidate" } });
+    await c.env.DB.batch([
+      c.env.DB.prepare("INSERT INTO media_assets(id,key,url,file_name,folder,mime_type,size_bytes,width,height,alt_text,thumbnail_key,thumbnail_url,content_hash,created_by) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)").bind(mediaId,key,url,validated.fileName,folder,file.type,file.size,width,height,altText,thumbnailKey,thumbnailUrl,hash,c.get("admin").id),
+      auditStatement(c, "uploaded", "media", mediaId, { fileName: validated.fileName, key, mimeType: file.type, size: file.size, contentHash: hash }),
+    ]);
+  } catch (error) {
+    await c.env.MEDIA.delete([key, thumbnailKey].filter(Boolean)).catch(() => {});
+    if (String(error?.message || "").includes("media_assets.content_hash")) {
+      const racedDuplicate = await c.env.DB.prepare("SELECT * FROM media_assets WHERE content_hash=?1").bind(hash).first();
+      if (racedDuplicate) return c.json({ ...racedDuplicate, duplicate: true, usage_count: (await mediaUsage(c, racedDuplicate)).count });
+    }
+    throw error;
+  }
+  return c.json({ id: mediaId, key, url, fileName: validated.fileName, file_name: validated.fileName, folder, mime_type: file.type, size_bytes: file.size, width, height, alt_text: altText, thumbnail_key: thumbnailKey, thumbnail_url: thumbnailUrl, content_hash: hash, duplicate: false, usage_count: 0 }, 201);
 });
 app.put("/api/admin/media/:id/replace", async (c) => {
   const current=await c.env.DB.prepare("SELECT * FROM media_assets WHERE id=?1").bind(c.req.param("id")).first();
   if(!current)throw new HTTPError(404,"Media not found.");
   const form=await c.req.formData(); const file=form.get("file");
-  assertMediaFile(file);
-  const fileBytes = await file.arrayBuffer();
-  assertMediaSignature(file, fileBytes);
-  await c.env.MEDIA.put(current.key,fileBytes,{httpMetadata:{contentType:file.type,cacheControl:"public,max-age=300,must-revalidate"}});
+  const fileBytes = file instanceof File ? await file.arrayBuffer() : new ArrayBuffer(0);
+  const validated = validateMediaUpload(file, fileBytes);
+  const hash = await contentHash(fileBytes);
+  const duplicate = await c.env.DB.prepare("SELECT id,file_name FROM media_assets WHERE content_hash=?1 AND id<>?2").bind(hash,current.id).first();
+  if (duplicate) throw new HTTPError(409, `This file already exists as "${duplicate.file_name}".`, "duplicate_media");
   const thumbnail = form.get("thumbnail");
-  let thumbnailKey = current.thumbnail_key; let thumbnailUrl = current.thumbnail_url;
-  if (thumbnail instanceof File && thumbnail.type === "image/webp" && thumbnail.size <= 1_000_000) {
+  let thumbnailKey = current.thumbnail_key; let thumbnailUrl = current.thumbnail_url; let thumbnailBytes = null;
+  if (thumbnail instanceof File) {
+    thumbnailBytes = await thumbnail.arrayBuffer();
+    validateMediaUpload(thumbnail, thumbnailBytes, { profile: true, maxBytes: 1_000_000 });
+    if (thumbnail.type !== "image/webp") throw new HTTPError(400, "Generated thumbnail must be WEBP.", "invalid_thumbnail");
     thumbnailKey ||= `${current.folder}/thumbnails/${crypto.randomUUID()}.webp`;
-    await c.env.MEDIA.put(thumbnailKey,await thumbnail.arrayBuffer(),{httpMetadata:{contentType:"image/webp",cacheControl:"public,max-age=300,must-revalidate"}});
     thumbnailUrl = `${new URL(c.req.url).origin}/api/media/${thumbnailKey}`;
-  } else if (!file.type.startsWith("image/") && thumbnailKey) {
-    await c.env.MEDIA.delete(thumbnailKey); thumbnailKey = null; thumbnailUrl = null;
+  } else if (!file.type.startsWith("image/")) {
+    thumbnailKey = null; thumbnailUrl = null;
   }
   const width = Math.max(0, Number.parseInt(String(form.get("width") || "0"), 10) || 0) || null;
   const height = Math.max(0, Number.parseInt(String(form.get("height") || "0"), 10) || 0) || null;
-  await c.env.DB.prepare("UPDATE media_assets SET file_name=?1,mime_type=?2,size_bytes=?3,width=?4,height=?5,thumbnail_key=?6,thumbnail_url=?7,updated_at=CURRENT_TIMESTAMP WHERE id=?8").bind(file.name,file.type,file.size,width,height,thumbnailKey,thumbnailUrl,current.id).run();
-  await audit(c,"replaced","media",current.id,{key:current.key,fileName:file.name});
-  return c.json({...current,file_name:file.name,mime_type:file.type,size_bytes:file.size,width,height,thumbnail_key:thumbnailKey,thumbnail_url:thumbnailUrl});
+  const previousObject = await c.env.MEDIA.get(current.key);
+  const previousBytes = previousObject ? await previousObject.arrayBuffer() : null;
+  const previousThumbnail = thumbnailBytes && current.thumbnail_key ? await c.env.MEDIA.get(current.thumbnail_key) : null;
+  const previousThumbnailBytes = previousThumbnail ? await previousThumbnail.arrayBuffer() : null;
+  try {
+    await c.env.MEDIA.put(current.key,fileBytes,{httpMetadata:{contentType:file.type,cacheControl:"public,max-age=300,must-revalidate"}});
+    if (thumbnailBytes) await c.env.MEDIA.put(thumbnailKey,thumbnailBytes,{httpMetadata:{contentType:"image/webp",cacheControl:"public,max-age=300,must-revalidate"}});
+    const statements = [
+      c.env.DB.prepare("UPDATE media_assets SET file_name=?1,mime_type=?2,size_bytes=?3,width=?4,height=?5,thumbnail_key=?6,thumbnail_url=?7,content_hash=?8,updated_at=CURRENT_TIMESTAMP WHERE id=?9").bind(validated.fileName,file.type,file.size,width,height,thumbnailKey,thumbnailUrl,hash,current.id),
+      auditStatement(c,"replaced","media",current.id,{key:current.key,fileName:validated.fileName,mimeType:file.type,size:file.size,contentHash:hash}),
+    ];
+    if (current.thumbnail_key && !thumbnailKey) {
+      statements.push(c.env.DB.prepare("INSERT INTO media_deletion_queue(asset_id,object_key) VALUES(?1,?2)").bind(`${current.id}:thumbnail:${id()}`,current.thumbnail_key));
+    }
+    await c.env.DB.batch(statements);
+  } catch (error) {
+    if (previousBytes) {
+      await c.env.MEDIA.put(current.key,previousBytes,{httpMetadata:{contentType:current.mime_type,cacheControl:"public,max-age=300,must-revalidate"}}).catch(() => {});
+    } else {
+      await c.env.MEDIA.delete(current.key).catch(() => {});
+    }
+    if (thumbnailBytes) {
+      if (previousThumbnailBytes) {
+        await c.env.MEDIA.put(current.thumbnail_key,previousThumbnailBytes,{httpMetadata:{contentType:"image/webp",cacheControl:"public,max-age=300,must-revalidate"}}).catch(() => {});
+      } else {
+        await c.env.MEDIA.delete(thumbnailKey).catch(() => {});
+      }
+    }
+    throw error;
+  }
+  if (current.thumbnail_key && !thumbnailKey) {
+    try {
+      await c.env.MEDIA.delete(current.thumbnail_key);
+      await c.env.DB.prepare("DELETE FROM media_deletion_queue WHERE object_key=?1").bind(current.thumbnail_key).run();
+    } catch (error) {
+      console.error("Deferred media thumbnail cleanup", { assetId: current.id, error: String(error?.message || error) });
+    }
+  }
+  return c.json({...current,file_name:validated.fileName,mime_type:file.type,size_bytes:file.size,width,height,thumbnail_key:thumbnailKey,thumbnail_url:thumbnailUrl,content_hash:hash});
 });
 app.delete("/api/admin/media/:id", async (c) => {
   const media = await c.env.DB.prepare("SELECT id,key,url,thumbnail_key FROM media_assets WHERE id=?1").bind(c.req.param("id")).first();
   if (!media) throw new HTTPError(404, "Media not found.");
-  const usage = await mediaUsage(c, media);
-  if (usage.count) throw new HTTPError(409, `This asset is currently used in ${usage.count} location${usage.count === 1 ? "" : "s"}.`);
-  await c.env.MEDIA.delete([media.key, media.thumbnail_key].filter(Boolean));
-  await c.env.DB.prepare("DELETE FROM media_assets WHERE id=?1").bind(c.req.param("id")).run();
-  await audit(c, "deleted", "media", c.req.param("id"), { key: media.key });
-  return c.json({ ok: true });
+  const assertionId = id();
+  try {
+    await c.env.DB.batch([
+      c.env.DB.prepare(`DELETE FROM media_assets AS m WHERE id=?1 AND (${usageExpression})=0`).bind(media.id),
+      c.env.DB.prepare("INSERT INTO transaction_assertions(id,value) VALUES(?1,(SELECT 1 FROM media_deletion_queue WHERE asset_id=?2))").bind(assertionId,media.id),
+      c.env.DB.prepare("DELETE FROM transaction_assertions WHERE id=?1").bind(assertionId),
+      auditStatement(c, "deleted", "media", media.id, { key: media.key }),
+    ]);
+  } catch {
+    const usage = await mediaUsage(c, media);
+    if (usage.count) throw new HTTPError(409, `This asset is currently used in ${usage.count} location${usage.count === 1 ? "" : "s"}.`, "media_in_use");
+    const stillExists = await c.env.DB.prepare("SELECT id FROM media_assets WHERE id=?1").bind(media.id).first();
+    if (!stillExists) return c.json({ ok: true, alreadyDeleted: true });
+    throw new HTTPError(409, "Media usage changed while deletion was in progress. Refresh and try again.", "media_delete_conflict");
+  }
+  let cleanupPending = false;
+  try {
+    await c.env.MEDIA.delete([media.key, media.thumbnail_key].filter(Boolean));
+    await c.env.DB.prepare("DELETE FROM media_deletion_queue WHERE asset_id=?1").bind(media.id).run();
+  } catch (error) {
+    cleanupPending = true;
+    await c.env.DB.prepare("UPDATE media_deletion_queue SET attempts=attempts+1,last_error=?1,updated_at=CURRENT_TIMESTAMP WHERE asset_id=?2").bind(String(error?.message || error).slice(0,500),media.id).run().catch(() => {});
+  }
+  return c.json({ ok: true, cleanupPending });
 });
 app.delete("/api/admin/reviews/:id", async (c) => {
-  await c.env.DB.prepare("DELETE FROM reviews WHERE id=?1").bind(c.req.param("id")).run();
-  await audit(c, "deleted", "review", c.req.param("id"));
+  const review = await c.env.DB.prepare("SELECT id FROM reviews WHERE id=?1").bind(c.req.param("id")).first();
+  if (!review) throw new HTTPError(404, "Review not found.", "review_not_found");
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM reviews WHERE id=?1").bind(review.id),
+    auditStatement(c, "deleted", "review", review.id),
+  ]);
   return c.json({ ok: true });
 });
 app.put("/api/admin/homepage/:id", async (c) => {
   const data=await body(c);
-  await c.env.DB.prepare("UPDATE homepage_sections SET title=?1,content_json=?2,enabled=?3,sort_order=?4,updated_at=CURRENT_TIMESTAMP WHERE id=?5").bind(data.title||null,json(data.content||{}),data.enabled===false?0:1,Number(data.sortOrder)||0,c.req.param("id")).run();
-  await audit(c,"updated","homepage",c.req.param("id"));
+  const content = assertSafeStructuredValue(data.content || {}, "Homepage content");
+  if (!(await c.env.DB.prepare("SELECT id FROM homepage_sections WHERE id=?1").bind(c.req.param("id")).first())) throw new HTTPError(404, "Homepage section not found.", "homepage_section_not_found");
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE homepage_sections SET title=?1,content_json=?2,enabled=?3,sort_order=?4,updated_at=CURRENT_TIMESTAMP WHERE id=?5").bind(data.title||null,json(content),data.enabled===false?0:1,Number(data.sortOrder)||0,c.req.param("id")),
+    auditStatement(c,"updated","homepage",c.req.param("id")),
+  ]);
   return c.json({ok:true});
 });
 app.post("/api/admin/digital", async (c) => {
   const data=await body(c); const contentId=data.id||id();
-  await c.env.DB.prepare("INSERT INTO digital_content(id,content_type,title,slug,summary,content,image_url,source_url,featured,status,published_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET content_type=excluded.content_type,title=excluded.title,slug=excluded.slug,summary=excluded.summary,content=excluded.content,image_url=excluded.image_url,source_url=excluded.source_url,featured=excluded.featured,status=excluded.status,published_at=excluded.published_at,updated_at=CURRENT_TIMESTAMP").bind(contentId,data.contentType,data.title,data.slug,data.summary||null,data.content||null,data.imageUrl||null,data.sourceUrl||null,data.featured?1:0,data.status||"draft",data.status==="published"?(data.publishedAt||new Date().toISOString()):null).run();
-  await audit(c,data.id?"updated":"created","digital",contentId,{title:data.title});
+  assertSafeStructuredValue(data, "Digital content", 500_000);
+  if (!["weather","mandi","scheme","icar","article"].includes(data.contentType) || !String(data.title || "").trim() || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(String(data.slug || ""))) throw new HTTPError(400, "Digital content type, title, or slug is invalid.", "invalid_digital_content");
+  await c.env.DB.batch([
+    c.env.DB.prepare("INSERT INTO digital_content(id,content_type,title,slug,summary,content,image_url,source_url,featured,status,published_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET content_type=excluded.content_type,title=excluded.title,slug=excluded.slug,summary=excluded.summary,content=excluded.content,image_url=excluded.image_url,source_url=excluded.source_url,featured=excluded.featured,status=excluded.status,published_at=excluded.published_at,updated_at=CURRENT_TIMESTAMP").bind(contentId,data.contentType,String(data.title).trim().slice(0,240),data.slug,data.summary||null,data.content||null,data.imageUrl||null,data.sourceUrl||null,data.featured?1:0,data.status||"draft",data.status==="published"?(data.publishedAt||new Date().toISOString()):null),
+    auditStatement(c,data.id?"updated":"created","digital",contentId,{title:data.title}),
+  ]);
   return c.json({id:contentId});
 });
 app.post("/api/admin/seo", async (c) => {
   const data=await body(c); const seoId=data.id||id();
+  assertSafeStructuredValue(data, "SEO content", 250_000);
   let openGraph = data.openGraph || {};
   if (!data.openGraph && data.openGraphJson) { try { openGraph = JSON.parse(data.openGraphJson); } catch { openGraph = {}; } }
   if (data.openGraphImageUrl !== undefined) openGraph = { ...openGraph, image: data.openGraphImageUrl || undefined };
   let twitter = data.twitter || {};
   if (!data.twitter && data.twitterJson) { try { twitter = JSON.parse(data.twitterJson); } catch { twitter = {}; } }
-  await c.env.DB.prepare("INSERT INTO seo_entries(id,route,meta_title,meta_description,canonical_url,open_graph_json,twitter_json,robots) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET route=excluded.route,meta_title=excluded.meta_title,meta_description=excluded.meta_description,canonical_url=excluded.canonical_url,open_graph_json=excluded.open_graph_json,twitter_json=excluded.twitter_json,robots=excluded.robots,updated_at=CURRENT_TIMESTAMP").bind(seoId,data.route,data.metaTitle||null,data.metaDescription||null,data.canonicalUrl||null,json(openGraph),json(twitter),data.robots||"index,follow").run();
-  await audit(c,data.id?"updated":"created","seo",seoId,{route:data.route});
+  if (!String(data.route || "").startsWith("/")) throw new HTTPError(400, "SEO route must be site-relative.", "invalid_seo_route");
+  await c.env.DB.batch([
+    c.env.DB.prepare("INSERT INTO seo_entries(id,route,meta_title,meta_description,canonical_url,open_graph_json,twitter_json,robots) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET route=excluded.route,meta_title=excluded.meta_title,meta_description=excluded.meta_description,canonical_url=excluded.canonical_url,open_graph_json=excluded.open_graph_json,twitter_json=excluded.twitter_json,robots=excluded.robots,updated_at=CURRENT_TIMESTAMP").bind(seoId,data.route,data.metaTitle||null,data.metaDescription||null,data.canonicalUrl||null,json(openGraph),json(twitter),data.robots||"index,follow"),
+    auditStatement(c,data.id?"updated":"created","seo",seoId,{route:data.route}),
+  ]);
   return c.json({id:seoId});
 });
 app.put("/api/admin/permissions/:userId", async (c) => {
   const data=await body(c);
   if(!["SUPER_ADMIN","ADMIN"].includes(data.role))throw new HTTPError(400,"Invalid administrator role.");
-  await c.env.DB.prepare("INSERT INTO user_permissions(user_id,role) VALUES(?1,?2) ON CONFLICT(user_id) DO UPDATE SET role=excluded.role,updated_at=CURRENT_TIMESTAMP").bind(c.req.param("userId"),data.role).run();
-  await audit(c,"role_changed","user",c.req.param("userId"),{role:data.role});
+  const target = await c.env.DB.prepare("SELECT u.id,COALESCE(p.role,u.role) role FROM users u LEFT JOIN user_permissions p ON p.user_id=u.id WHERE u.id=?1").bind(c.req.param("userId")).first();
+  if (!target) throw new HTTPError(404, "User not found.");
+  await c.env.DB.batch([
+    c.env.DB.prepare("INSERT INTO user_permissions(user_id,role) VALUES(?1,?2) ON CONFLICT(user_id) DO UPDATE SET role=excluded.role,updated_at=CURRENT_TIMESTAMP").bind(target.id,data.role),
+    c.env.DB.prepare("UPDATE users SET session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?1").bind(target.id),
+    auditStatement(c,"role_changed","user",target.id,{previousRole:target.role,newRole:data.role,sessionsRevoked:true}),
+  ]);
   return c.json({ok:true});
 });
 
@@ -760,7 +1004,34 @@ export default {
     await env.DB.batch([
       env.DB.prepare("UPDATE cms_entries SET status='published',updated_at=CURRENT_TIMESTAMP WHERE status='scheduled' AND publish_at<=CURRENT_TIMESTAMP"),
       env.DB.prepare("UPDATE cms_entries SET status='archived',updated_at=CURRENT_TIMESTAMP WHERE status='published' AND expires_at IS NOT NULL AND expires_at<=CURRENT_TIMESTAMP"),
+      env.DB.prepare("DELETE FROM rate_limit_buckets WHERE datetime(expires_at)<CURRENT_TIMESTAMP"),
+      env.DB.prepare("DELETE FROM admin_login_attempts WHERE attempted_at<datetime('now','-7 days')"),
     ]);
+    const pendingMediaDeletes = (await env.DB.prepare("SELECT * FROM media_deletion_queue ORDER BY created_at LIMIT 50").all()).results;
+    for (const pending of pendingMediaDeletes) {
+      try {
+        await env.MEDIA.delete([pending.object_key, pending.thumbnail_key].filter(Boolean));
+        await env.DB.prepare("DELETE FROM media_deletion_queue WHERE asset_id=?1").bind(pending.asset_id).run();
+      } catch (error) {
+        await env.DB.prepare("UPDATE media_deletion_queue SET attempts=attempts+1,last_error=?1,updated_at=CURRENT_TIMESTAMP WHERE asset_id=?2")
+          .bind(String(error?.message || error).slice(0,500), pending.asset_id).run();
+      }
+    }
+    const unhashedMedia = (await env.DB.prepare("SELECT id,key FROM media_assets WHERE content_hash IS NULL AND duplicate_of IS NULL ORDER BY created_at LIMIT 10").all()).results;
+    for (const asset of unhashedMedia) {
+      try {
+        const object = await env.MEDIA.get(asset.key);
+        if (!object) continue;
+        const hash = await contentHash(await object.arrayBuffer());
+        const duplicate = await env.DB.prepare("SELECT id FROM media_assets WHERE content_hash=?1 AND id<>?2").bind(hash,asset.id).first();
+        await env.DB.prepare(duplicate
+          ? "UPDATE media_assets SET duplicate_of=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2 AND content_hash IS NULL"
+          : "UPDATE media_assets SET content_hash=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2 AND content_hash IS NULL")
+          .bind(duplicate ? duplicate.id : hash,asset.id).run();
+      } catch (error) {
+        console.error("Media hash backfill failed", { assetId: asset.id, error: String(error?.message || error) });
+      }
+    }
     if (!env.NOTIFICATION_WEBHOOK) return;
     const queued = (await env.DB.prepare("SELECT * FROM notifications WHERE status='queued' ORDER BY created_at LIMIT 50").all()).results;
     for (const notification of queued) {

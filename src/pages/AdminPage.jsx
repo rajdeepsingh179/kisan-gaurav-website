@@ -1,7 +1,8 @@
 import {
-  Activity, BarChart3, Boxes, ChevronDown, ClipboardList, FileSearch, FileText, Globe2, Home,
-  Image, LayoutDashboard, LogOut, Menu, MessageSquare, Moon, Package, Plus, Search,
-  Settings, ShoppingBasket, Tags, TicketPercent, Trash2, Users, X,
+  Activity, AlertTriangle, BarChart3, Boxes, CheckCircle2, ChevronDown, ClipboardList,
+  FileSearch, FileText, Globe2, Home, Image, LayoutDashboard, LogOut, Menu, MessageSquare,
+  Moon, Package, Plus, RefreshCw, Search, Settings, ShoppingBasket, Tags, TicketPercent,
+  Trash2, Users, X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
@@ -10,6 +11,7 @@ import useDocumentTitle from "../hooks/useDocumentTitle";
 import { apiFetch } from "../services/api";
 import ContentWorkspace from "../components/admin/ContentWorkspace";
 import AdminProfileMenu from "../components/admin/AdminProfileMenu";
+import AdminAccessSkeleton from "../components/admin/AdminAccessSkeleton";
 import MediaLibrary from "../components/admin/MediaLibrary";
 import { JsonMediaTextarea, MediaField } from "../components/admin/MediaPicker";
 import { formatRole, isAdminRole } from "../utils/roles";
@@ -18,7 +20,7 @@ const navigation = [
   ["Overview", [["dashboard", LayoutDashboard, "Dashboard"], ["analytics", BarChart3, "Analytics"]]],
   ["Commerce", [["products", Package, "Products"], ["categories", Tags, "Categories"], ["inventory", Boxes, "Inventory"], ["orders", ClipboardList, "Orders"], ["customers", Users, "Customers"], ["coupons", TicketPercent, "Coupons"], ["reviews", MessageSquare, "Reviews"]]],
   ["Content", [["content", FileText, "Content CMS"], ["media", Image, "Media library"], ["banners", Image, "Banners"], ["homepage", Home, "Homepage"], ["digital", Globe2, "Digital platform"], ["seo", FileSearch, "SEO"]]],
-  ["System", [["settings", Settings, "Site settings"], ["activity", Activity, "Activity logs"]]],
+  ["System", [["users", Users, "Users"], ["settings", Settings, "Site settings"], ["activity", Activity, "Activity logs"]]],
 ];
 const allSections = navigation.flatMap(([, items]) => items);
 const money = (paise = 0) => `₹${(Number(paise) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
@@ -31,6 +33,7 @@ const columns = {
   inventory: [["sku", "SKU"], ["product_name", "Product"], ["name", "Variant"], ["stock", "Stock"], ["low_stock_threshold", "Low stock at"]],
   orders: [["order_number", "Order"], ["customer_name", "Customer"], ["status", "Status"], ["total_paise", "Total"], ["created_at", "Placed"]],
   customers: [["name", "Customer"], ["email", "Email"], ["role", "Role"], ["orders_count", "Orders"], ["lifetime_value_paise", "Lifetime value"]],
+  users: [["name", "User"], ["email", "Email"], ["role", "Role"], ["orders_count", "Orders"], ["created_at", "Joined"]],
   coupons: [["code", "Code"], ["type", "Type"], ["value", "Value"], ["usage_count", "Uses"], ["enabled", "Enabled"]],
   reviews: [["product_name", "Product"], ["customer_name", "Customer"], ["rating", "Rating"], ["status", "Status"], ["featured", "Featured"]],
   banners: [["title", "Banner"], ["banner_type", "Placement"], ["device", "Device"], ["active", "Active"]],
@@ -92,11 +95,12 @@ export default function AdminPage({ initialModule = "dashboard" }) {
   const [dark, setDark] = useState(false);
   const [editor, setEditor] = useState(null);
   const [notice, setNotice] = useState("");
+  const searchRef = useRef(null);
   useDocumentTitle("Commerce Admin");
 
   const load = async (module = active) => {
     if (module === "media") { setError(""); setData([]); setBusy(false); return; }
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setData(null);
     try { setData(await apiFetch(`/api/admin/${module}`)); }
     catch (reason) { setError(reason.message); setData(null); }
     finally { setBusy(false); }
@@ -105,8 +109,19 @@ export default function AdminPage({ initialModule = "dashboard" }) {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (user && isAdminRole(user.role)) load(active); }, [active, user]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!notice) return undefined; const timer = setTimeout(() => setNotice(""), 3000); return () => clearTimeout(timer); }, [notice]);
+  useEffect(() => {
+    const handleShortcut = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+      if (event.key === "Escape" && mobileNav) setMobileNav(false);
+    };
+    document.addEventListener("keydown", handleShortcut);
+    return () => document.removeEventListener("keydown", handleShortcut);
+  }, [mobileNav]);
 
-  if (loading) return <div className="admin-gate"><span className="admin-spinner" />Checking secure access…</div>;
+  if (loading) return <AdminAccessSkeleton />;
   if (!user) return <Navigate replace to="/admin/login" />;
   if (!isAdminRole(user.role)) return <Navigate replace to="/account" />;
 
@@ -138,33 +153,36 @@ export default function AdminPage({ initialModule = "dashboard" }) {
 
   return (
     <div className={`admin-app${dark ? " is-dark" : ""}`}>
+      <a className="admin-skip-link" href="#admin-main">Skip to main content</a>
       <aside className={mobileNav ? "is-open" : ""}>
         <div className="admin-brand"><ShoppingBasket /><span><strong>Kisan Gaurav</strong><small>Commerce OS</small></span><button type="button" onClick={() => setMobileNav(false)} aria-label="Close menu"><X /></button></div>
         <nav aria-label="Admin navigation">
           {navigation.map(([group, items]) => <div className="admin-nav-group" key={group}><small>{group}</small>{items.map(([module, Icon, label]) => (
-            <button type="button" key={module} className={active === module ? "is-active" : ""} onClick={() => selectModule(module)}><Icon /> <span>{label}</span></button>
+            <button type="button" key={module} title={label} aria-current={active === module ? "page" : undefined} className={active === module ? "is-active" : ""} onClick={() => selectModule(module)}><Icon aria-hidden="true" /> <span>{label}</span></button>
           ))}</div>)}
         </nav>
         <div className="admin-user"><span>{(user.name || user.email || "A")[0].toUpperCase()}</span><div><strong>{user.name || "Administrator"}</strong><small>{labelFor(user.role)}</small></div><Link to="/admin/logout" aria-label="Sign out"><LogOut /></Link></div>
       </aside>
       {mobileNav ? <button className="admin-scrim" type="button" aria-label="Close navigation" onClick={() => setMobileNav(false)} /> : null}
-      <main>
+      <main id="admin-main">
         <header className="admin-topbar">
           <button type="button" className="admin-menu" onClick={() => setMobileNav(true)} aria-label="Open menu"><Menu /></button>
-          <div className="admin-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search this workspace…" aria-label="Search" /><kbd>⌘ K</kbd></div>
-          <button type="button" className="admin-icon-button" onClick={() => setDark((value) => !value)} aria-label="Toggle dark mode"><Moon /></button>
+          <label className="admin-search"><Search aria-hidden="true" /><input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${title.toLowerCase()}`} aria-label={`Search ${title}`} />{query ? <button type="button" onClick={() => { setQuery(""); searchRef.current?.focus(); }} aria-label="Clear search"><X /></button> : <kbd>Ctrl K</kbd>}</label>
+          <span className="admin-context-label"><strong>{title}</strong><small>{filtered.length || rows.length || 0} visible records</small></span>
+          <button type="button" className="admin-icon-button" onClick={() => setDark((value) => !value)} aria-label={dark ? "Use light theme" : "Use dark theme"} aria-pressed={dark}><Moon /></button>
           <AdminProfileMenu user={user} />
         </header>
         <div className="admin-content">
           <div className="admin-heading"><div><p>Commerce / {title}</p><h1>{title}</h1></div>{editable.has(active) && active !== "settings" && active !== "homepage" ? <button type="button" className="admin-primary" onClick={() => openEditor()}><Plus /> Add {active === "seo" ? "entry" : active.slice(0, -1)}</button> : null}</div>
-          {notice ? <div className="admin-notice" role="status">{notice}</div> : null}
+          {notice ? <div className="admin-notice" role="status" aria-live="polite"><CheckCircle2 aria-hidden="true" /><span>{notice}</span><button type="button" onClick={() => setNotice("")} aria-label="Dismiss success message"><X /></button></div> : null}
           {user.mustChangePassword ? <div className="admin-security-warning"><strong>Secure your Super Admin account.</strong><span>The initial password must be replaced before regular administration.</span><Link to="/admin/change-password">Change password now</Link></div> : null}
-          {error ? <div className="admin-error" role="alert">{error}<button type="button" onClick={() => setError("")}><X /></button></div> : null}
-          {busy && data === null ? <div className="admin-loading"><span className="admin-spinner" /> Loading workspace…</div> : null}
+          {error && data !== null ? <div className="admin-error" role="alert"><AlertTriangle aria-hidden="true" /><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error"><X /></button></div> : null}
+          {busy && data === null ? <AdminWorkspaceSkeleton module={active} /> : null}
+          {!busy && error && data === null ? <AdminErrorState message={error} onRetry={() => load(active)} /> : null}
           {active === "dashboard" && data ? <Dashboard data={data} onNavigate={selectModule} /> : null}
           {active === "media" ? <MediaLibrary setError={setError} setNotice={setNotice} /> : null}
           {active === "content" && Array.isArray(data) ? <ContentWorkspace rows={filtered} onReload={load} setError={setError} setNotice={setNotice} /> : null}
-          {active !== "dashboard" && active !== "media" && active !== "content" && Array.isArray(data) ? <DataTable module={active} rows={filtered} onEdit={openEditor} onDelete={remove} onReload={load} setError={setError} setNotice={setNotice} /> : null}
+          {active !== "dashboard" && active !== "media" && active !== "content" && Array.isArray(data) ? <DataTable module={active} rows={filtered} filtered={Boolean(query)} onEdit={openEditor} onDelete={remove} onReload={load} setError={setError} setNotice={setNotice} /> : null}
         </div>
       </main>
       {editor ? <Editor module={active} value={editor} onClose={() => setEditor(null)} onSaved={async () => { setEditor(null); setNotice("Changes saved"); await load(); }} setError={setError} setNotice={setNotice} /> : null}
@@ -180,10 +198,29 @@ function Dashboard({ data, onNavigate }) {
   ];
   const maxRevenue = Math.max(1, ...(data.monthly || []).map((item) => Number(item.revenue_paise)));
   const maxTop = Math.max(1, ...(data.topProducts || []).map((item) => Number(item.units)));
-  return <div className="admin-dashboard"><div className="admin-kpis">{cards.map(([label, value, module], index) => <button type="button" onClick={() => onNavigate(module)} key={label}><span>{label}</span><strong>{value}</strong><small>{index === 0 ? "Lifetime gross sales" : "View details"} →</small></button>)}</div><div className="admin-chart-grid"><section className="admin-panel admin-sales-chart"><header><div><p>Revenue trend</p><h2>Sales performance</h2></div><span>Last 12 months <ChevronDown /></span></header><div className="admin-bars" role="img" aria-label="Revenue by month">{(data.monthly || []).map((item) => <div key={item.month} title={`${item.month}: ${money(item.revenue_paise)}`}><i style={{ height: `${Math.max(4, Number(item.revenue_paise) / maxRevenue * 100)}%` }} /><small>{item.month?.slice(5)}</small></div>)}</div></section><section className="admin-panel admin-top-products"><header><div><p>Top products</p><h2>Units sold</h2></div></header>{(data.topProducts || []).length ? data.topProducts.map((item, index) => <div className="admin-ranked" key={item.product_name}><span>{index + 1}</span><div><strong>{item.product_name}</strong><i><b style={{ width: `${Number(item.units) / maxTop * 100}%` }} /></i></div><em>{item.units}</em></div>) : <Empty />}</section></div><section className="admin-panel admin-recent"><header><div><p>Live operations</p><h2>Recent orders</h2></div><button type="button" onClick={() => onNavigate("orders")}>View all</button></header><table><thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Total</th><th>Placed</th></tr></thead><tbody>{(data.recentOrders || []).map((order) => <tr key={order.id}><td><strong>{order.order_number}</strong></td><td>{order.customer_name}</td><td><Status value={order.status} /></td><td>{money(order.total_paise)}</td><td>{formatDate(order.created_at)}</td></tr>)}</tbody></table></section></div>;
+  const monthly = data.monthly || [];
+  const topProducts = data.topProducts || [];
+  const recentOrders = data.recentOrders || [];
+  return <div className="admin-dashboard">
+    <div className="admin-kpis">{cards.map(([label, value, module], index) => <button type="button" onClick={() => onNavigate(module)} key={label}><span>{label}</span><strong>{value}</strong><small>{index === 0 ? "Lifetime gross sales" : "View details"} →</small></button>)}</div>
+    <div className="admin-chart-grid">
+      <section className="admin-panel admin-sales-chart">
+        <header><div><p>Revenue trend</p><h2>Sales performance</h2></div><span>Last 12 months <ChevronDown aria-hidden="true" /></span></header>
+        {monthly.length ? <div className="admin-bars" role="img" aria-label="Revenue by month">{monthly.map((item) => <div key={item.month} title={`${item.month}: ${money(item.revenue_paise)}`}><i style={{ height: `${Math.max(4, Number(item.revenue_paise) / maxRevenue * 100)}%` }} /><small>{item.month?.slice(5)}</small></div>)}</div> : <Empty compact title="No revenue history yet" message="Revenue trends will appear after completed orders." />}
+      </section>
+      <section className="admin-panel admin-top-products">
+        <header><div><p>Top products</p><h2>Units sold</h2></div></header>
+        {topProducts.length ? topProducts.map((item, index) => <div className="admin-ranked" key={item.product_name}><span>{index + 1}</span><div><strong>{item.product_name}</strong><i><b style={{ width: `${Number(item.units) / maxTop * 100}%` }} /></i></div><em>{item.units}</em></div>) : <Empty compact title="No product sales yet" message="Top performers will appear here." />}
+      </section>
+    </div>
+    <section className="admin-panel admin-recent">
+      <header><div><p>Live operations</p><h2>Recent orders</h2></div><button type="button" onClick={() => onNavigate("orders")}>View all</button></header>
+      {recentOrders.length ? <div className="admin-table-scroll" tabIndex="0" aria-label="Recent orders"><table><thead><tr><th scope="col">Order</th><th scope="col">Customer</th><th scope="col">Status</th><th scope="col">Total</th><th scope="col">Placed</th></tr></thead><tbody>{recentOrders.map((order) => <tr key={order.id}><td><strong>{order.order_number}</strong></td><td>{order.customer_name}</td><td><Status value={order.status} /></td><td>{money(order.total_paise)}</td><td>{formatDate(order.created_at)}</td></tr>)}</tbody></table></div> : <Empty compact title="No recent orders" message="New orders will appear here." />}
+    </section>
+  </div>;
 }
 
-function DataTable({ module, rows, onEdit, onDelete, onReload, setError, setNotice }) {
+function DataTable({ module, rows, filtered, onEdit, onDelete, onReload, setError, setNotice }) {
   const config = columns[module] || []; const dragId = useRef(null);
   const request = async (path, options, message) => { try { await apiFetch(path, options); setNotice(message); await onReload(); } catch (reason) { setError(reason.message); } };
   const changeStatus = (row, status) => request(`/api/admin/orders/${row.id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }, "Order status updated");
@@ -200,20 +237,27 @@ function DataTable({ module, rows, onEdit, onDelete, onReload, setError, setNoti
   const actions = (row) => {
     if (module === "orders") return <select className="admin-status-select" value={row.status} onChange={(event) => changeStatus(row, event.target.value)}>{["pending","confirmed","packed","shipped","delivered","cancelled","returned","refunded"].map((value)=><option key={value}>{value}</option>)}</select>;
     if (module === "inventory") return <StockEditor row={row} onSave={updateStock} />;
-    if (module === "customers") return <select className="admin-status-select" value={isAdminRole(row.role) ? row.role : ""} onChange={(event)=>event.target.value && saveRole(row,event.target.value)}><option value="">No admin access</option><option value="ADMIN">Admin</option><option value="SUPER_ADMIN">Super Admin</option></select>;
+    if (["customers", "users"].includes(module)) return <select className="admin-status-select" aria-label={`Administrator role for ${row.email}`} value={isAdminRole(row.role) ? row.role : ""} onChange={(event)=>event.target.value && saveRole(row,event.target.value)}><option value="">No admin access</option><option value="ADMIN">Admin</option><option value="SUPER_ADMIN">Super Admin</option></select>;
     if (module === "reviews") return <div className="admin-row-actions"><button type="button" onClick={()=>moderate(row,{status:row.status==="published"?"rejected":"published"})}>{row.status==="published"?"Reject":"Approve"}</button><button type="button" onClick={()=>moderate(row,{featured:!row.featured})}>{row.featured?"Unfeature":"Feature"}</button><button type="button" className="is-danger" onClick={()=>onDelete(row)}><Trash2 /></button></div>;
     if (!editable.has(module)) return null;
     return <div className="admin-row-actions"><button type="button" onClick={()=>onEdit(row)}>Edit</button>{module==="products"?<button type="button" onClick={()=>duplicate(row)}>Duplicate</button>:null}{["products","categories"].includes(module)?<button type="button" className="is-danger" onClick={()=>onDelete(row)}><Trash2 /></button>:null}</div>;
   };
-  if (!rows.length) return <section className="admin-panel"><Empty /></section>;
-  const hasActions=editable.has(module)||["orders","inventory","reviews","customers"].includes(module);
-  return <section className="admin-panel admin-data"><div className="admin-table-meta"><span>{rows.length} records</span><span>{module==="categories"?"Drag rows to reorder":"Database synced"}</span></div><div className="admin-table-scroll"><table><thead><tr>{config.map(([,label])=><th key={label}>{label}</th>)}{hasActions?<th><span className="sr-only">Actions</span></th>:null}</tr></thead><tbody>{rows.map((row)=><tr draggable={module==="categories"} onDragStart={()=>{dragId.current=row.id;}} onDragOver={(event)=>module==="categories"&&event.preventDefault()} onDrop={()=>dropCategory(row.id)} key={row.id||row.key||row.month}>{config.map(([key])=><td key={key}>{renderCell(key,row[key])}</td>)}{hasActions?<td>{actions(row)}</td>:null}</tr>)}</tbody></table></div></section>;
+  if (!rows.length) return <section className="admin-panel"><Empty title={filtered ? "No matching records" : `No ${labelFor(module)} yet`} message={filtered ? "Try a broader search or clear the search field." : "Create the first record to start this workspace."} /></section>;
+  const hasActions=editable.has(module)||["orders","inventory","reviews","customers","users"].includes(module);
+  return <section className="admin-panel admin-data"><div className="admin-table-meta"><span><strong>{rows.length}</strong> records</span><span>{module==="categories"?"Drag rows to reorder":"Live database view"}</span></div><div className="admin-table-scroll" tabIndex="0" aria-label={`${labelFor(module)} table`}><table><thead><tr>{config.map(([,label])=><th scope="col" key={label}>{label}</th>)}{hasActions?<th scope="col"><span className="sr-only">Actions</span></th>:null}</tr></thead><tbody>{rows.map((row)=><tr draggable={module==="categories"} onDragStart={()=>{dragId.current=row.id;}} onDragOver={(event)=>module==="categories"&&event.preventDefault()} onDrop={()=>dropCategory(row.id)} key={row.id||row.key||row.month}>{config.map(([key])=><td key={key}>{renderCell(key,row[key])}</td>)}{hasActions?<td>{actions(row)}</td>:null}</tr>)}</tbody></table></div></section>;
 }
-function StockEditor({ row, onSave }) { const [stock, setStock] = useState(row.stock); return <div className="admin-stock-edit"><input type="number" min="0" value={stock} onChange={(event) => setStock(event.target.value)} /><button type="button" disabled={Number(stock) === Number(row.stock)} onClick={() => onSave(row, stock)}>Save</button></div>; }
+function StockEditor({ row, onSave }) { const [stock, setStock] = useState(row.stock); return <div className="admin-stock-edit"><input aria-label={`Stock for ${row.product_name} ${row.name}`} type="number" min="0" value={stock} onChange={(event) => setStock(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && Number(stock) !== Number(row.stock)) onSave(row, stock); }} /><button type="button" disabled={Number(stock) === Number(row.stock)} onClick={() => onSave(row, stock)}>Save</button></div>; }
 
 function Editor({ module, value, onClose, onSaved, setError, setNotice }) {
   const [form, setForm] = useState(value); const [busy, setBusy] = useState(false);
+  const formRef = useRef(null);
   const update = (key, next) => setForm((current) => ({ ...current, [key]: next }));
+  useEffect(() => {
+    formRef.current?.querySelector("input:not([disabled]), select, textarea")?.focus();
+    const closeOnEscape = (event) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
   const save = async (event) => {
     event.preventDefault(); setBusy(true);
     try {
@@ -224,7 +268,8 @@ function Editor({ module, value, onClose, onSaved, setError, setNotice }) {
       await apiFetch(path, { method, body: JSON.stringify(body) }); await onSaved();
     } catch (reason) { setError(reason.message); } finally { setBusy(false); }
   };
-  return <div className="admin-modal" role="dialog" aria-modal="true" aria-label={`Edit ${module}`}><button type="button" className="admin-modal__scrim" onClick={onClose} aria-label="Close" /><form onSubmit={save}><header><div><p>{form.id ? "Edit record" : "New record"}</p><h2>{module === "products" ? "Product workspace" : labelFor(module)}</h2></div><button type="button" onClick={onClose} aria-label="Close"><X /></button></header><div className="admin-editor-body">{module === "products" ? <ProductFields form={form} update={update} setError={setError} setNotice={setNotice} /> : module === "settings" ? <><Field field={["key", "Setting key"]} form={form} update={update} disabled={Boolean(form.key)} /><Field field={["value_json", "JSON value", "textarea", true]} form={form} update={update} /></> : module === "homepage" ? <><Field field={["title", "Section title"]} form={form} update={update} /><JsonMediaTextarea label="Content (JSON)" value={form.content_json || "{}"} onChange={(next) => update("content_json", next)} folder="homepage" help="Place the cursor at an image value, then insert an existing or newly uploaded asset." setError={setError} setNotice={setNotice} /><Field field={["enabled", "Enabled", "checkbox"]} form={form} update={update} /><Field field={["sort_order", "Sort order", "number"]} form={form} update={update} /></> : <div className="admin-form-grid">{(editorFields[module] || []).map((field) => <Field key={field[0]} field={field} form={form} update={update} setError={setError} setNotice={setNotice} />)}</div>}</div><footer><button type="button" onClick={onClose}>Cancel</button><button className="admin-primary" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button></footer></form></div>;
+  const headingId = `admin-editor-${module}`;
+  return <div className="admin-modal" role="dialog" aria-modal="true" aria-labelledby={headingId}><button type="button" className="admin-modal__scrim" onClick={onClose} aria-label="Close editor" /><form ref={formRef} onSubmit={save}><header><div><p>{form.id ? "Edit record" : "New record"}</p><h2 id={headingId}>{module === "products" ? "Product workspace" : labelFor(module)}</h2></div><button type="button" onClick={onClose} aria-label="Close editor"><X /></button></header><div className="admin-editor-body">{module === "products" ? <ProductFields form={form} update={update} setError={setError} setNotice={setNotice} /> : module === "settings" ? <><Field field={["key", "Setting key"]} form={form} update={update} disabled={Boolean(form.key)} /><Field field={["value_json", "JSON value", "textarea", true]} form={form} update={update} /></> : module === "homepage" ? <><Field field={["title", "Section title"]} form={form} update={update} /><JsonMediaTextarea label="Content (JSON)" value={form.content_json || "{}"} onChange={(next) => update("content_json", next)} folder="homepage" help="Place the cursor at an image value, then insert an existing or newly uploaded asset." setError={setError} setNotice={setNotice} /><Field field={["enabled", "Enabled", "checkbox"]} form={form} update={update} /><Field field={["sort_order", "Sort order", "number"]} form={form} update={update} /></> : <div className="admin-form-grid">{(editorFields[module] || []).map((field) => <Field key={field[0]} field={field} form={form} update={update} setError={setError} setNotice={setNotice} />)}</div>}</div><footer><span>Esc to close</span><button type="button" onClick={onClose}>Cancel</button><button className="admin-primary" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button></footer></form></div>;
 }
 
 function ProductFields({ form, update, setError, setNotice }) {
@@ -251,7 +296,12 @@ function Field({ field, form, update, disabled = false, setError, setNotice }) {
 }
 
 function Status({ value }) { return <span className={`admin-status is-${value}`}>{labelFor(String(value))}</span>; }
-function Empty() { return <div className="admin-empty"><Boxes /><h3>No records yet</h3><p>Your database is ready for its first entry.</p></div>; }
+function Empty({ title = "No records yet", message = "Your database is ready for its first entry.", compact = false }) { return <div className={`admin-empty${compact ? " is-compact" : ""}`}><Boxes aria-hidden="true" /><h3>{title}</h3><p>{message}</p></div>; }
+function AdminWorkspaceSkeleton({ module }) {
+  const dashboard = module === "dashboard";
+  return <div className={`admin-workspace-skeleton${dashboard ? " is-dashboard" : ""}`} aria-busy="true" aria-label={`Loading ${labelFor(module)}`}><span className="sr-only">Loading {labelFor(module)}</span>{dashboard ? <><div className="admin-skeleton-kpis">{Array.from({ length: 5 }, (_, index) => <div className="admin-skeleton" key={index} />)}</div><div className="admin-skeleton-panels"><div className="admin-skeleton" /><div className="admin-skeleton" /></div></> : <div className="admin-skeleton-table"><div className="admin-skeleton" />{Array.from({ length: 7 }, (_, index) => <div className="admin-skeleton" key={index} />)}</div>}</div>;
+}
+function AdminErrorState({ message, onRetry }) { return <section className="admin-panel admin-state-card" role="alert"><span><AlertTriangle aria-hidden="true" /></span><h2>We couldn’t load this workspace</h2><p>{message}</p><button type="button" className="admin-primary" onClick={onRetry}><RefreshCw aria-hidden="true" /> Try again</button></section>; }
 function formatDate(value) { if (!value) return "—"; const date = new Date(`${value}${String(value).includes("Z") ? "" : "Z"}`); return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" }).format(date); }
 function renderCell(key, value) {
   if (["total_paise", "revenue_paise", "lifetime_value_paise"].includes(key)) return money(value);

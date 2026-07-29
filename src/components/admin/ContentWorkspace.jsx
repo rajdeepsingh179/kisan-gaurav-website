@@ -71,7 +71,7 @@ export default function ContentWorkspace({ rows, onReload, setError, setNotice }
   const reorderMenus=async(items)=>{try{await apiFetch("/api/admin/content-system/menus/reorder",{method:"PATCH",body:JSON.stringify({items})});setNotice("Menu order updated");await refreshSystem();}catch(reason){setError(reason.message);}};
 
   return <div className="content-cms">
-    <div className="content-cms__tabs" role="tablist" aria-label="Content types"><span>Content types</span>{types.map(([id, label]) => <button type="button" role="tab" aria-selected={type === id} className={type === id ? "is-active" : ""} key={id} onClick={() => { setType(id); setEditor(null); }}>{label}</button>)}</div>
+    <div className="content-cms__tabs" role="tablist" aria-label="Content types"><span>Content types</span>{types.map(([id, label]) => <button type="button" role="tab" aria-selected={type === id} tabIndex={type === id ? 0 : -1} className={type === id ? "is-active" : ""} key={id} onClick={() => { setType(id); setEditor(null); }} onKeyDown={(event) => { if (!["ArrowDown","ArrowUp","ArrowRight","ArrowLeft"].includes(event.key)) return; event.preventDefault(); const tabs=[...event.currentTarget.parentElement.querySelectorAll('[role="tab"]')]; const step=["ArrowDown","ArrowRight"].includes(event.key)?1:-1; const next=tabs[(tabs.indexOf(event.currentTarget)+step+tabs.length)%tabs.length]; next.focus(); next.click(); }}>{label}</button>)}</div>
     <div className="content-cms__workspace">
       <div className="content-cms__bar"><div><strong>{types.find(([id]) => id === type)?.[1]}</strong><span>{["menus", "emails"].includes(type) ? systemRows.length : visible.length} records · drag rows to reorder</span></div>{type === "menus" ? <button className="admin-primary" type="button" onClick={() => setEditor({ systemType: "menus", menuLocation: "main", label: "", url: "", enabled: true, sortOrder: systemRows.length * 10 })}><Plus /> Add menu item</button> : type !== "emails" ? <button className="admin-primary" type="button" onClick={create}><Plus /> Add content</button> : null}</div>
       {type === "menus" ? <SystemTable rows={systemRows} type="menus" onReorder={reorderMenus} onEdit={(row) => setEditor({ systemType: "menus", ...normalize(row) })} onDelete={async (row) => { await apiFetch(`/api/admin/content-system/menus/${row.id}`, { method: "DELETE" }); setNotice("Menu item removed"); await refreshSystem(); }} /> : type === "emails" ? <SystemTable rows={systemRows} type="emails" onEdit={(row) => setEditor({ systemType: "emails", ...normalize(row), htmlContent: row.html_content, textContent: row.text_content })} /> :
@@ -84,7 +84,13 @@ export default function ContentWorkspace({ rows, onReload, setError, setNotice }
 }
 
 function ContentEditor({ value, type, onClose, onSaved, setError, setNotice }) {
-  const [form, setForm] = useState(value); const [busy, setBusy] = useState(false); const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const [form, setForm] = useState(value); const [busy, setBusy] = useState(false); const formRef = useRef(null); const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  useEffect(() => {
+    formRef.current?.querySelector("input, select, textarea")?.focus();
+    const closeOnEscape = (event) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
   const submit = async (event) => {
     event.preventDefault(); setBusy(true);
     try {
@@ -97,7 +103,8 @@ function ContentEditor({ value, type, onClose, onSaved, setError, setNotice }) {
       await onSaved();
     } catch (reason) { setError(reason instanceof SyntaxError ? "Content and SEO must contain valid JSON." : reason.message); } finally { setBusy(false); }
   };
-  return <div className="admin-modal content-editor" role="dialog" aria-modal="true"><button type="button" className="admin-modal__scrim" onClick={onClose} /><form onSubmit={submit}><header><div><p>Content Management System</p><h2>{form.id ? "Edit" : "Create"} {form.systemType || form.entryType || type}</h2></div><button type="button" onClick={onClose}><X /></button></header><div className="admin-editor-body">{form.systemType === "menus" ? <MenuFields form={form} update={update} setError={setError} setNotice={setNotice} /> : form.systemType === "emails" ? <EmailFields form={form} update={update} /> : <EntryFields form={form} update={update} setError={setError} setNotice={setNotice} />}</div><footer><button type="button" onClick={onClose}>Cancel</button><button className="admin-primary" disabled={busy}><Save /> {busy ? "Saving…" : form.status === "published" ? "Save & publish" : "Save draft"}</button></footer></form></div>;
+  const headingId = "content-editor-heading";
+  return <div className="admin-modal content-editor" role="dialog" aria-modal="true" aria-labelledby={headingId}><button type="button" className="admin-modal__scrim" onClick={onClose} aria-label="Close content editor" /><form ref={formRef} onSubmit={submit}><header><div><p>Content Management System</p><h2 id={headingId}>{form.id ? "Edit" : "Create"} {form.systemType || form.entryType || type}</h2></div><button type="button" onClick={onClose} aria-label="Close content editor"><X /></button></header><div className="admin-editor-body">{form.systemType === "menus" ? <MenuFields form={form} update={update} setError={setError} setNotice={setNotice} /> : form.systemType === "emails" ? <EmailFields form={form} update={update} /> : <EntryFields form={form} update={update} setError={setError} setNotice={setNotice} />}</div><footer><span>Esc to close</span><button type="button" onClick={onClose}>Cancel</button><button className="admin-primary" disabled={busy}><Save /> {busy ? "Saving…" : form.status === "published" ? "Save & publish" : "Save draft"}</button></footer></form></div>;
 }
 function EntryFields({ form, update, setError, setNotice }) {
   return <div className="content-form">

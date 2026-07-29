@@ -67,6 +67,8 @@ export function AuthProvider({ children }) {
     const redirectUrl = await postAuthAction("/api/auth/signout", { csrfToken, callbackUrl: window.location.origin });
     const error = authErrorFrom(redirectUrl, "Unable to sign out.");
     if (error) throw new Error(error);
+    const session = await apiFetch("/api/auth/session");
+    if (session?.user?.id) throw new Error("The session could not be revoked. Please try again.");
     setUser(null);
   }, []);
   const value = useMemo(() => ({

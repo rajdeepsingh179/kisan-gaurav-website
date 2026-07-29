@@ -1,5 +1,5 @@
 import { Image as ImageIcon, Plus, Trash2, X } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MediaBrowser } from "./MediaLibrary";
 
 export default function MediaPicker({
@@ -8,15 +8,23 @@ export default function MediaPicker({
 }) {
   const initial = Array.isArray(value) ? value.filter(Boolean) : value ? [value] : [];
   const [selected, setSelected] = useState(initial);
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    dialogRef.current?.querySelector("input, button")?.focus();
+    const closeOnEscape = (event) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, open]);
   if (!open) return null;
   const toggle = (asset, replace = false) => {
     if (!multiple || replace) { setSelected([asset]); return; }
     setSelected((current) => current.some((item) => item.id === asset.id || item.url === asset.url) ? current.filter((item) => item.id !== asset.id && item.url !== asset.url) : [...current, asset]);
   };
-  return <div className="admin-modal media-picker-modal" role="dialog" aria-modal="true" aria-label="Select media">
+  return <div className="admin-modal media-picker-modal" role="dialog" aria-modal="true" aria-labelledby="media-picker-heading">
     <button type="button" className="admin-modal__scrim" onClick={onClose} aria-label="Close media picker" />
-    <section>
-      <header><div><p>Media Library</p><h2>{multiple ? "Select media" : "Select an asset"}</h2></div><button type="button" onClick={onClose} aria-label="Close"><X /></button></header>
+    <section ref={dialogRef}>
+      <header><div><p>Media Library</p><h2 id="media-picker-heading">{multiple ? "Select media" : "Select an asset"}</h2></div><button type="button" onClick={onClose} aria-label="Close"><X /></button></header>
       <div className="media-picker-body"><MediaBrowser selectionMode multiple={multiple} selected={selected} onToggle={toggle} defaultFolder={folder} acceptType={acceptType} setError={setError} setNotice={setNotice} /></div>
       <footer><span>{selected.length} selected</span><button type="button" onClick={onClose}>Cancel</button><button type="button" className="admin-primary" disabled={!selected.length} onClick={() => { onConfirm(multiple ? selected : selected[0]); onClose(); }}>Confirm selection</button></footer>
     </section>

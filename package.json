@@ -7,6 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint . --max-warnings 0",
+    "test": "npm --prefix worker test",
+    "test:release": "npm run lint && npm test && npm run worker:check && npm run build",
+    "test:security": "npm --prefix worker run test:security",
     "preview": "vite preview",
     "worker:check": "npm --prefix worker run check",
     "pages:deploy": "npm run build && wrangler pages deploy dist --project-name kisan-gaurav-website"

@@ -8,6 +8,9 @@ const DUMMY_PASSWORD = {
   salt: "kg-auth-timing-v1",
   hash: "c103993171ec6094acabc6dd6e81deca8b230ad20471b94a5e6058e05f4380b6",
 };
+const authAudit = (env, actorUserId, action, details = {}, ipAddress = null) => env.DB.prepare(
+  "INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json,ip_address) VALUES(?1,?2,?3,'authentication',?4,?5,?6)",
+).bind(crypto.randomUUID(), actorUserId || null, action, actorUserId || null, JSON.stringify(details), ipAddress).run();
 
 export async function hashPassword(password, salt = crypto.randomUUID()) {
   const material = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
@@ -30,23 +33,33 @@ export function authConfig(env) {
     Credentials({
       credentials: { email: { type: "email" }, password: { type: "password" } },
       authorize: async (credentials, request) => {
-        const email = String(credentials?.email || "").trim().toLowerCase();
+        const rawEmail = String(credentials?.email || "").trim().toLowerCase();
+        const rawPassword = String(credentials?.password || "");
+        const email = rawEmail.slice(0, 254);
+        const credentialsValid = rawEmail.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && rawPassword.length > 0 && rawPassword.length <= 256;
         const ip = request?.headers?.get("CF-Connecting-IP") || null;
-        const recent = await env.DB.prepare("SELECT COUNT(*) count FROM admin_login_attempts WHERE email=?1 AND succeeded=0 AND attempted_at>datetime('now','-15 minutes')").bind(email).first();
-        if (Number(recent?.count) >= 10) return null;
-        const user = await env.DB.prepare("SELECT u.id,u.email,u.name,COALESCE(up.role,u.role) role,u.profile_photo_url,u.password_hash,u.password_salt,u.must_change_password,u.session_version FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id WHERE u.email=?1").bind(email).first();
+        const recent = await env.DB.prepare("SELECT SUM(CASE WHEN email=?1 THEN 1 ELSE 0 END) email_failures,SUM(CASE WHEN ip_address=?2 THEN 1 ELSE 0 END) ip_failures FROM admin_login_attempts WHERE succeeded=0 AND attempted_at>datetime('now','-15 minutes')").bind(email, ip).first();
+        if (Number(recent?.email_failures) >= 10 || Number(recent?.ip_failures) >= 30) {
+          await authAudit(env, null, "login_rate_limited", { email }, ip);
+          return null;
+        }
+        const user = credentialsValid ? await env.DB.prepare("SELECT u.id,u.email,u.name,COALESCE(up.role,u.role) role,u.profile_photo_url,u.password_hash,u.password_salt,u.must_change_password,u.session_version FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id WHERE u.email=?1").bind(email).first() : null;
         const passwordMatches = await verifyPassword(
-          String(credentials?.password || ""),
+          credentialsValid ? rawPassword : rawPassword.slice(0, 256),
           user?.password_salt || DUMMY_PASSWORD.salt,
           user?.password_hash || DUMMY_PASSWORD.hash,
         );
         if (!user?.password_hash || !passwordMatches) {
-          await env.DB.prepare("INSERT INTO admin_login_attempts(id,email,ip_address,succeeded) VALUES(?1,?2,?3,0)").bind(crypto.randomUUID(),email,ip).run();
+          await env.DB.batch([
+            env.DB.prepare("INSERT INTO admin_login_attempts(id,email,ip_address,succeeded) VALUES(?1,?2,?3,0)").bind(crypto.randomUUID(),email,ip),
+            env.DB.prepare("INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json,ip_address) VALUES(?1,NULL,'login_failed','authentication',NULL,?2,?3)").bind(crypto.randomUUID(),JSON.stringify({ email }),ip),
+          ]);
           return null;
         }
         await env.DB.batch([
           env.DB.prepare("INSERT INTO admin_login_attempts(id,email,ip_address,succeeded) VALUES(?1,?2,?3,1)").bind(crypto.randomUUID(),email,ip),
           env.DB.prepare("DELETE FROM admin_login_attempts WHERE attempted_at<datetime('now','-1 day')"),
+          env.DB.prepare("INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json,ip_address) VALUES(?1,?2,'login_succeeded','authentication',?2,?3,?4)").bind(crypto.randomUUID(),user.id,JSON.stringify({ provider: "credentials" }),ip),
         ]);
         return { id: user.id, email: user.email, name: user.name, role: user.role, image: user.profile_photo_url, mustChangePassword: Boolean(user.must_change_password), sessionVersion: Number(user.session_version) };
       },
@@ -104,6 +117,27 @@ export function authConfig(env) {
       session({ session, token }) {
         if (session.user && token?.uid) { session.user.id = token.uid; session.user.role = token.role || "customer"; session.user.mustChangePassword = Boolean(token.mustChangePassword); }
         return session;
+      },
+      redirect({ url, baseUrl }) {
+        try {
+          const target = new URL(url, baseUrl);
+          return target.origin === new URL(baseUrl).origin ? target.toString() : baseUrl;
+        } catch {
+          return baseUrl;
+        }
+      },
+    },
+    events: {
+      async signIn({ user, account }) {
+        if (account?.provider === "google" && user?.id) await authAudit(env, user.id, "login_succeeded", { provider: "google" });
+      },
+      async signOut(message) {
+        const userId = "token" in message ? message.token?.uid : message.session?.userId;
+        if (!userId) return;
+        await env.DB.batch([
+          env.DB.prepare("UPDATE users SET session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?1").bind(userId),
+          env.DB.prepare("INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json) VALUES(?1,?2,'logout_all_sessions','authentication',?2,?3)").bind(crypto.randomUUID(),userId,JSON.stringify({ sessionsRevoked: true })),
+        ]);
       },
     },
   };

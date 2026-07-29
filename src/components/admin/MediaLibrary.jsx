@@ -1,5 +1,5 @@
 import {
-  Check, Clipboard, Download, FileText, Grid3X3, Image as ImageIcon, List, LoaderCircle,
+  Check, Clipboard, Download, FileText, Grid3X3, Image as ImageIcon, List,
   MoreHorizontal, RefreshCw, Search, Trash2, Upload, X,
 } from "lucide-react";
 import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
@@ -158,7 +158,7 @@ export function MediaBrowser({
   return <div className={`media-library${selectionMode ? " is-picker" : ""}`}>
     <div className={`media-dropzone${dragging ? " is-dragging" : ""}`} onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDragging(false); }} onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(event.dataTransfer.files); }}>
       <Upload aria-hidden="true" /><span><strong>Drop media here</strong><small>JPG, PNG, WEBP, SVG or PDF · 12 MB maximum</small></span>
-      <button type="button" className="admin-primary" disabled={uploading} onClick={() => inputRef.current?.click()}>{uploading ? <LoaderCircle className="is-spinning" /> : <Upload />} {uploading ? `${progress?.complete || 0}/${progress?.total || "…"}` : "Browse files"}</button>
+      <button type="button" className="admin-primary" disabled={uploading} aria-busy={uploading} onClick={() => inputRef.current?.click()}><Upload /> {uploading ? `Uploading ${progress?.complete || 0}/${progress?.total || "…"}` : "Browse files"}</button>
       <input ref={inputRef} hidden type="file" multiple accept={acceptType === "images" ? ".jpg,.jpeg,.png,.webp,.svg,image/jpeg,image/png,image/webp,image/svg+xml" : MEDIA_ACCEPT} onChange={(event) => addFiles(event.target.files)} />
     </div>
     <div className="media-toolbar">
@@ -169,10 +169,14 @@ export function MediaBrowser({
       <div className="media-view-toggle" aria-label="View"><button type="button" className={view === "grid" ? "is-active" : ""} onClick={() => setView("grid")} aria-label="Grid view"><Grid3X3 /></button><button type="button" className={view === "list" ? "is-active" : ""} onClick={() => setView("list")} aria-label="List view"><List /></button></div>
     </div>
     <div className="media-results-meta"><span>{total} assets</span><span>⌘/Ctrl + U to upload</span></div>
-    {assets.length ? <div className={`media-results is-${view}`}>{assets.map((asset) => <MediaAsset key={asset.id} asset={asset} selected={selectedIds.has(asset.id) || selectedUrls.has(asset.url)} selectionMode={selectionMode} onChoose={() => choose(asset)} onPreview={() => setPreview(asset)} onCopy={() => copyUrl(asset)} onRemove={() => remove(asset)} />)}</div> : !loading ? <div className="admin-panel admin-empty"><ImageIcon /><h3>No media found</h3><p>Adjust the filters or upload the first asset in this folder.</p></div> : null}
-    <div className="media-load-more" ref={sentinelRef}>{loading ? <><LoaderCircle className="is-spinning" /> Loading media…</> : nextCursor ? "Scroll for more" : assets.length ? "All assets loaded" : null}</div>
+    {assets.length ? <div className={`media-results is-${view}`}>{assets.map((asset) => <MediaAsset key={asset.id} asset={asset} selected={selectedIds.has(asset.id) || selectedUrls.has(asset.url)} selectionMode={selectionMode} onChoose={() => choose(asset)} onPreview={() => setPreview(asset)} onCopy={() => copyUrl(asset)} onRemove={() => remove(asset)} />)}</div> : loading ? <MediaSkeleton view={view} /> : <div className="admin-panel admin-empty"><ImageIcon /><h3>No media found</h3><p>{query ? "Try a broader search or clear the current filters." : "Upload the first asset to start the shared Media Library."}</p></div>}
+    <div className="media-load-more" ref={sentinelRef}>{loading && assets.length ? <><span className="media-loading-bar" aria-hidden="true" /> Loading more assets…</> : nextCursor ? "Scroll for more" : assets.length ? "All assets loaded" : null}</div>
     {preview ? <MediaPreview asset={preview} onClose={() => setPreview(null)} onReplace={() => replace(preview)} onRemove={() => remove(preview)} onCopy={() => copyUrl(preview)} onUpdate={updateAsset} busy={uploading} /> : null}
   </div>;
+}
+
+function MediaSkeleton({ view }) {
+  return <div className={`media-skeleton is-${view}`} aria-busy="true" aria-label="Loading media">{Array.from({ length: view === "grid" ? 10 : 6 }, (_, index) => <div className="admin-skeleton" key={index}><span /><i /><small /></div>)}</div>;
 }
 
 function MediaAsset({ asset, selected, selectionMode, onChoose, onPreview, onCopy, onRemove }) {
