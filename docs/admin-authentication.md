@@ -23,7 +23,7 @@ The first production migration creates this account idempotently:
 - Role: `SUPER_ADMIN`
 
 The password is not stored in plaintext. The migration contains a PBKDF2-SHA256
-hash using 310,000 iterations and a separate salt. The account is marked as
+hash using Cloudflare Workers' maximum 100,000 iterations and a separate salt. The account is marked as
 requiring a password change.
 
 Sign in at `/admin/login`, then use the security warning or open
@@ -86,9 +86,12 @@ Use `SUPER_ADMIN` only for trusted owners who need permission-management access.
 Store the Google OAuth values as Worker secrets:
 
 ```sh
-npx wrangler secret put AUTH_GOOGLE_ID
-npx wrangler secret put AUTH_GOOGLE_SECRET
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
 ```
+
+These values must be Worker secrets on `kisan-gaurav-api`. Secrets configured
+only on the Pages project are not exposed to the Worker.
 
 The Google OAuth application's authorized callback URL is:
 

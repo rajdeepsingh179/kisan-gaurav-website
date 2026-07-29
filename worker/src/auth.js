@@ -7,7 +7,7 @@ const hex = (buffer) => [...new Uint8Array(buffer)].map((byte) => byte.toString(
 
 export async function hashPassword(password, salt = crypto.randomUUID()) {
   const material = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: encoder.encode(salt), iterations: 310000, hash: "SHA-256" }, material, 256);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: encoder.encode(salt), iterations: 100000, hash: "SHA-256" }, material, 256);
   return { salt, hash: hex(bits) };
 }
 
@@ -20,6 +20,8 @@ export async function verifyPassword(password, salt, expected) {
 }
 
 export function authConfig(env) {
+  const googleClientId = env.GOOGLE_CLIENT_ID || env.AUTH_GOOGLE_ID;
+  const googleClientSecret = env.GOOGLE_CLIENT_SECRET || env.AUTH_GOOGLE_SECRET;
   const providers = [
     Credentials({
       credentials: { email: { type: "email" }, password: { type: "password" } },
@@ -41,7 +43,7 @@ export function authConfig(env) {
       },
     }),
   ];
-  if (env.AUTH_GOOGLE_ID && env.AUTH_GOOGLE_SECRET) providers.unshift(Google({ clientId: env.AUTH_GOOGLE_ID, clientSecret: env.AUTH_GOOGLE_SECRET }));
+  if (googleClientId && googleClientSecret) providers.unshift(Google({ clientId: googleClientId, clientSecret: googleClientSecret }));
   return {
     basePath: "/api/auth",
     secret: env.AUTH_SECRET,

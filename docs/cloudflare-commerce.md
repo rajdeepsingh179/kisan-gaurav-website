@@ -9,14 +9,14 @@
 
 ## Authentication
 
-Auth.js runs inside the Worker at `/api/auth/*` with JWT sessions, Google OAuth and a credentials provider. Passwords are PBKDF2-SHA-256 derived with unique salts and 310,000 iterations. Customer and admin authorization is checked inside Worker routes; `/api/admin/*` requires `role=admin`.
+Auth.js runs inside the Worker at `/api/auth/*` with JWT sessions, Google OAuth and a credentials provider. Passwords are PBKDF2-SHA-256 derived with unique salts and Cloudflare Workers' maximum 100,000 iterations. Customer and admin authorization is checked inside Worker routes; `/api/admin/*` requires `ADMIN` or `SUPER_ADMIN`.
 
 Configure Worker secrets:
 
 ```text
 AUTH_SECRET
-AUTH_GOOGLE_ID
-AUTH_GOOGLE_SECRET
+GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET
 RAZORPAY_KEY_ID
 RAZORPAY_KEY_SECRET
 NOTIFICATION_WEBHOOK_SECRET

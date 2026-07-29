@@ -40,7 +40,7 @@ INSERT OR IGNORE INTO users(
   'initial-super-admin',
   'admin@kisangaurav.com',
   'Kisan Gaurav Super Admin',
-  '5ea5ca3480cc95624642040aca4f5f2d3e0d6c508ae6b3afb5474aabf0b58b71',
+  '350f67b65dd27ecaa260072d89b83ee7162444b4971fae6d16ccc157c5666c25',
   'kg-super-admin-v1-2026',
   'customer',
   CURRENT_TIMESTAMP,
@@ -51,7 +51,7 @@ INSERT OR IGNORE INTO users(
 -- OAuth, initialize its password without creating another user row.
 UPDATE users
 SET
-  password_hash=COALESCE(password_hash,'5ea5ca3480cc95624642040aca4f5f2d3e0d6c508ae6b3afb5474aabf0b58b71'),
+  password_hash=COALESCE(password_hash,'350f67b65dd27ecaa260072d89b83ee7162444b4971fae6d16ccc157c5666c25'),
   password_salt=COALESCE(password_salt,'kg-super-admin-v1-2026'),
   must_change_password=CASE WHEN password_hash IS NULL THEN 1 ELSE must_change_password END
 WHERE email='admin@kisangaurav.com';

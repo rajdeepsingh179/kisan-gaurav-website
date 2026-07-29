@@ -13,7 +13,7 @@ if (password.length < 12) throw new Error("Password must contain at least 12 cha
 if (!["SUPER_ADMIN", "ADMIN"].includes(role)) throw new Error("Role must be SUPER_ADMIN or ADMIN.");
 
 const salt = randomUUID();
-const hash = pbkdf2Sync(password, salt, 310000, 32, "sha256").toString("hex");
+const hash = pbkdf2Sync(password, salt, 100000, 32, "sha256").toString("hex");
 const id = `local-admin-${createHash("sha256").update(email).digest("hex").slice(0, 20)}`;
 const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const sql = `
