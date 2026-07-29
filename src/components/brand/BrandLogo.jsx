@@ -4,12 +4,12 @@ import useLanguage from "../../hooks/useLanguage";
 import { cn } from "../../utils/cn";
 import BrandMark from "./BrandMark";
 
-export default function BrandLogo({ className, showTagline = false }) {
+export default function BrandLogo({ className, showTagline = false, markClassName, priority = false }) {
   const { language } = useLanguage();
 
   return (
     <span className={cn("inline-flex items-center gap-3", className)}>
-      <BrandMark className="size-10 shrink-0" />
+      <BrandMark className={cn("size-10 shrink-0", markClassName)} priority={priority} />
       <span className="text-left">
         <span className="block font-bold tracking-[-0.025em] text-foreground">
           {BRAND.name}

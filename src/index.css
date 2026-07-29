@@ -1539,3 +1539,20 @@ em { font-family: Georgia, "Times New Roman", serif; font-weight: 400; }
 @media(prefers-reduced-motion:reduce){
   .admin-app *, .admin-app *::before, .admin-app *::after { scroll-behavior:auto!important; animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; }
 }
+
+/* Canonical Kisan Gaurav brand mark */
+.brand-mark { display:block; aspect-ratio:1; object-fit:cover; object-position:center; }
+.admin-brand-mark { flex:0 0 auto; border-radius:28%; box-shadow:0 5px 16px rgb(0 0 0 / .18); }
+.admin-brand-mark--sidebar { width:34px; height:34px; }
+.admin-brand-mark--login { width:56px; height:56px; }
+.admin-brand-mark--gate { width:52px; height:52px; }
+.admin-brand > .admin-brand-mark { width:34px; height:34px; padding:0; background:none; }
+.admin-login__brand > .admin-brand-mark { width:56px; height:56px; padding:0; background:none; }
+.admin-access-skeleton > .admin-brand-mark { border-radius:28%; }
+.store-footer .brand-mark { width:48px; height:48px; }
+
+@media(max-width:760px){
+  .store-nav__brand .brand-mark { width:40px; height:40px; }
+  .store-footer .brand-mark { width:44px; height:44px; }
+  .admin-brand-mark--login { width:48px; height:48px; }
+}

@@ -4,6 +4,7 @@ import { AnimatePresence, m } from "framer-motion";
 import { X } from "lucide-react";
 
 import { Button } from "../ui";
+import BrandMark from "../brand/BrandMark";
 
 const focusableSelector =
   'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -139,16 +140,19 @@ export default function AuthModal({ children, description, isOpen, onClose, titl
               <X aria-hidden="true" className="size-5" />
             </button>
 
-            <div className="mb-6 pr-10">
-              <p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-primary-700">
-                Kisan Gaurav
-              </p>
-              <h2 className="text-2xl font-bold tracking-tight text-foreground" id={titleId}>
-                {title}
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-foreground-muted" id={descriptionId}>
-                {description}
-              </p>
+            <div className="mb-6 flex items-start gap-3 pr-10">
+              <BrandMark className="size-11 shrink-0" priority sizes="44px" />
+              <div>
+                <p className="mb-1 text-xs font-bold uppercase tracking-[0.16em] text-primary-700">
+                  Kisan Gaurav
+                </p>
+                <h2 className="text-2xl font-bold tracking-tight text-foreground" id={titleId}>
+                  {title}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-foreground-muted" id={descriptionId}>
+                  {description}
+                </p>
+              </div>
             </div>
 
             {children}

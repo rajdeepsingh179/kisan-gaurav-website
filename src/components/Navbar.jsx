@@ -72,7 +72,7 @@ export default function Navbar() {
     <>
       {announcement?.text ? <div className="announcement">{announcement.text}{announcement.linkUrl ? <> · <Link to={announcement.linkUrl}>{announcement.linkLabel}</Link></> : null}</div> : null}
       <header ref={navRef} className="store-nav">
-        <Link className="store-nav__brand" to="/" onClick={closeMenu}><BrandLogo showTagline /></Link>
+        <Link className="store-nav__brand" to="/" onClick={closeMenu}><BrandLogo showTagline priority /></Link>
         <nav id="primary-navigation" className={`store-nav__links ${open ? "is-open" : ""}`} aria-label="Primary navigation">
           <NavLink end to="/" onClick={closeMenu}>{labelFor("/", "Home")}</NavLink>
           <NavLink to="/shop" onClick={closeMenu}>{labelFor("/shop", "Shop")}</NavLink>

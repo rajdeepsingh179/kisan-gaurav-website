@@ -1,7 +1,7 @@
 import {
   Activity, AlertTriangle, BarChart3, Boxes, CheckCircle2, ChevronDown, ClipboardList,
   FileSearch, FileText, Globe2, Home, Image, LayoutDashboard, LogOut, Menu, MessageSquare,
-  Moon, Package, Plus, RefreshCw, Search, Settings, ShoppingBasket, Tags, TicketPercent,
+  Moon, Package, Plus, RefreshCw, Search, Settings, Tags, TicketPercent,
   Trash2, Users, X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -15,6 +15,7 @@ import AdminAccessSkeleton from "../components/admin/AdminAccessSkeleton";
 import MediaLibrary from "../components/admin/MediaLibrary";
 import { JsonMediaTextarea, MediaField } from "../components/admin/MediaPicker";
 import { formatRole, isAdminRole } from "../utils/roles";
+import BrandMark from "../components/brand/BrandMark";
 
 const navigation = [
   ["Overview", [["dashboard", LayoutDashboard, "Dashboard"], ["analytics", BarChart3, "Analytics"]]],
@@ -155,7 +156,7 @@ export default function AdminPage({ initialModule = "dashboard" }) {
     <div className={`admin-app${dark ? " is-dark" : ""}`}>
       <a className="admin-skip-link" href="#admin-main">Skip to main content</a>
       <aside className={mobileNav ? "is-open" : ""}>
-        <div className="admin-brand"><ShoppingBasket /><span><strong>Kisan Gaurav</strong><small>Commerce OS</small></span><button type="button" onClick={() => setMobileNav(false)} aria-label="Close menu"><X /></button></div>
+        <div className="admin-brand"><BrandMark className="admin-brand-mark admin-brand-mark--sidebar" priority sizes="34px" /><span><strong>Kisan Gaurav</strong><small>Commerce OS</small></span><button type="button" onClick={() => setMobileNav(false)} aria-label="Close menu"><X /></button></div>
         <nav aria-label="Admin navigation">
           {navigation.map(([group, items]) => <div className="admin-nav-group" key={group}><small>{group}</small>{items.map(([module, Icon, label]) => (
             <button type="button" key={module} title={label} aria-current={active === module ? "page" : undefined} className={active === module ? "is-active" : ""} onClick={() => selectModule(module)}><Icon aria-hidden="true" /> <span>{label}</span></button>
