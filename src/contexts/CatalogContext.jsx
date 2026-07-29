@@ -12,14 +12,16 @@ export function CatalogProvider({ children }) {
     return () => { active = false; };
   }, []);
   const value = useMemo(() => {
-    const categories = payload.categories.map((category) => ({
+    const categoryRows = Array.isArray(payload?.categories) ? payload.categories : [];
+    const productRows = Array.isArray(payload?.products) ? payload.products : [];
+    const categories = categoryRows.map((category) => ({
       ...category,
       id: category.slug,
       eyebrow: category.short_description || category.description || "",
       description: category.long_description || category.description || "",
       heroImage: category.hero_image_url || category.image_url || category.thumbnail_url,
     }));
-    const products = payload.products.map((product) => {
+    const products = productRows.map((product) => {
       const variants = (product.variants || []).map((variant) => variant.name);
       const variantDetails = Object.fromEntries((product.variants || []).map((variant) => [variant.name, variant]));
       const defaultVariant = product.variants?.find((variant) => variant.is_default) || product.variants?.[0];

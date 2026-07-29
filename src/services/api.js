@@ -7,8 +7,12 @@ export async function apiFetch(path, options = {}) {
     headers: { ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }), ...options.headers },
   });
   const contentType = response.headers.get("content-type") || "";
-  const data = contentType.includes("application/json") ? await response.json() : await response.text();
+  const isJson = contentType.includes("application/json");
+  const data = isJson ? await response.json() : await response.text();
   if (!response.ok) throw new Error(data?.error || data?.message || "Request failed.");
+  if (path.startsWith("/api/") && !isJson) {
+    throw new Error("The API returned an unexpected response.");
+  }
   return data;
 }
 

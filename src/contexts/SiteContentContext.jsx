@@ -13,14 +13,16 @@ export function SiteContentProvider({ children }) {
     return () => { active = false; };
   }, []);
   const value = useMemo(() => {
-    const entries = payload.entries.map((entry) => ({ ...entry, content: parse(entry.content_json), seo: parse(entry.seo_json) }));
+    const entryRows = Array.isArray(payload?.entries) ? payload.entries : [];
+    const menuRows = Array.isArray(payload?.menus) ? payload.menus : [];
+    const entries = entryRows.map((entry) => ({ ...entry, content: parse(entry.content_json), seo: parse(entry.seo_json) }));
     return {
       loading,
       entries,
-      menus: payload.menus,
+      menus: menuRows,
       byType: (type) => entries.filter((entry) => entry.entry_type === type),
       get: (type, slug) => entries.find((entry) => entry.entry_type === type && entry.slug === slug),
-      menu: (location) => payload.menus.filter((item) => item.menu_location === location),
+      menu: (location) => menuRows.filter((item) => item.menu_location === location),
     };
   }, [loading, payload]);
   return <SiteContentContext.Provider value={value}>{children}</SiteContentContext.Provider>;
