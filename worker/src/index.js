@@ -3,10 +3,28 @@ import { handleAuth, getSession, hashPassword, verifyPassword } from "./auth";
 import { calculateCheckout, id, json, persistOrder } from "./commerce";
 
 const app = new Hono();
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const trustedOrigins = (c) => new Set([
+  c.env.FRONTEND_URL,
+  "https://kisangaurav.com",
+  "https://www.kisangaurav.com",
+].filter(Boolean).map((value) => value.replace(/\/$/, "")));
+const isTrustedOrigin = (c, origin) => {
+  if (!origin) return false;
+  try {
+    const source = new URL(origin);
+    const target = new URL(c.req.url);
+    const localTarget = ["localhost", "127.0.0.1"].includes(target.hostname);
+    const localSource = ["localhost", "127.0.0.1"].includes(source.hostname);
+    return trustedOrigins(c).has(source.origin) || (localTarget && localSource);
+  } catch {
+    return false;
+  }
+};
 
 app.use("*", async (c, next) => {
   const origin = c.req.header("Origin");
-  if (origin && (origin === c.env.FRONTEND_URL || origin === "https://www.kisangaurav.com" || origin.endsWith(".pages.dev"))) {
+  if (origin && isTrustedOrigin(c, origin)) {
     c.header("Access-Control-Allow-Origin", origin);
     c.header("Access-Control-Allow-Credentials", "true");
     c.header("Vary", "Origin");
@@ -16,6 +34,10 @@ app.use("*", async (c, next) => {
   c.header("X-Content-Type-Options", "nosniff");
   c.header("Referrer-Policy", "strict-origin-when-cross-origin");
   if (c.req.method === "OPTIONS") return c.body(null, 204);
+  if (!SAFE_METHODS.has(c.req.method) && c.req.path.startsWith("/api/") && !c.req.path.startsWith("/api/auth/")) {
+    const source = origin || c.req.header("Referer");
+    if (!isTrustedOrigin(c, source)) return c.json({ error: "Request origin is not allowed." }, 403);
+  }
   await next();
 });
 
@@ -31,7 +53,11 @@ const body = async (c) => {
 };
 class HTTPError extends Error { constructor(status, message) { super(message); this.status = status; } }
 
-app.onError((error, c) => c.json({ error: error.message || "Unexpected error." }, error.status || 500));
+app.onError((error, c) => {
+  if (error instanceof HTTPError) return c.json({ error: error.message }, error.status);
+  console.error("Unhandled request error", error);
+  return c.json({ error: "Unexpected server error." }, 500);
+});
 app.get("/api/health", (c) => c.json({ ok: true, service: "kisan-gaurav-api", timestamp: new Date().toISOString() }));
 app.get("/sitemap.xml", async (c) => {
   const [products,content]=await c.env.DB.batch([
@@ -88,7 +114,7 @@ app.post("/api/account/reset-password", async (c) => {
   if (!token) throw new HTTPError(400, "Reset link is invalid or expired.");
   const password = await hashPassword(String(data.password));
   await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(password.hash, password.salt, token.user_id),
+    c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(password.hash, password.salt, token.user_id),
     c.env.DB.prepare("UPDATE password_reset_tokens SET used_at=CURRENT_TIMESTAMP WHERE token_hash=?1").bind(tokenHash),
   ]);
   return c.json({ ok: true });
@@ -110,7 +136,7 @@ app.post("/api/account/profile-photo", async (c) => {
   const file = form.get("file");
   if (!(file instanceof File) || !file.type.startsWith("image/") || file.size > 5_000_000) throw new HTTPError(400, "Upload a profile image under 5 MB.");
   const key = `profiles/${user.id}/${crypto.randomUUID()}.${file.type.split("/")[1] || "webp"}`;
-  await c.env.MEDIA.put(key, file.stream(), { httpMetadata: { contentType: file.type, cacheControl: "public,max-age=31536000,immutable" } });
+  await c.env.MEDIA.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type, cacheControl: "public,max-age=31536000,immutable" } });
   const url = `${new URL(c.req.url).origin}/api/media/${key}`;
   await c.env.DB.prepare("UPDATE users SET profile_photo_url=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2").bind(url, user.id).run();
   return c.json({ url });
@@ -179,9 +205,9 @@ app.get("/api/orders", async (c) => {
   return c.json((await c.env.DB.prepare("SELECT * FROM orders WHERE user_id=?1 ORDER BY created_at DESC").bind(user.id).all()).results);
 });
 app.get("/api/orders/:id", async (c) => {
-  const session = await sessionFor(c);
+  const user = await requireUser(c);
   const order = await c.env.DB.prepare("SELECT * FROM orders WHERE id=?1").bind(c.req.param("id")).first();
-  if (!order || (order.user_id && order.user_id !== session?.user?.id && !ADMIN_ROLES.has(session?.user?.role))) throw new HTTPError(404, "Order not found.");
+  if (!order || order.user_id !== user.id && !ADMIN_ROLES.has(user.role)) throw new HTTPError(404, "Order not found.");
   const history = (await c.env.DB.prepare("SELECT * FROM order_status_history WHERE order_id=?1 ORDER BY created_at").bind(order.id).all()).results;
   return c.json({ ...order, history });
 });
@@ -210,9 +236,13 @@ app.get("/api/orders/:id/invoice", async (c) => {
 
 app.get("/api/media/*", async (c) => {
   const key = c.req.path.replace("/api/media/", "");
-  const object = await c.env.MEDIA.get(key);
+  const object = await c.env.MEDIA.get(key, { onlyIf: c.req.raw.headers });
   if (!object) throw new HTTPError(404, "Media not found.");
-  return new Response(object.body, { headers: { "Content-Type": object.httpMetadata?.contentType || "application/octet-stream", "Cache-Control": object.httpMetadata?.cacheControl || "public,max-age=3600", ETag: object.httpEtag } });
+  if (!object.body) return new Response(null, { status: 304, headers: { ETag: object.httpEtag } });
+  const contentType = object.httpMetadata?.contentType || "application/octet-stream";
+  const headers = { "Content-Type": contentType, "Cache-Control": object.httpMetadata?.cacheControl || "public,max-age=3600", ETag: object.httpEtag };
+  if (contentType === "image/svg+xml") headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'";
+  return new Response(object.body, { headers });
 });
 app.post("/api/analytics/events", async (c) => {
   const data = await body(c); const session = await sessionFor(c);
@@ -258,10 +288,69 @@ const canAccess = (role, path, method) => {
   return !path.includes("/permissions") && !(method === "DELETE" && path.includes("/customers"));
 };
 const audit = (c, action, resourceType, resourceId, details = {}) => c.env.DB.prepare("INSERT INTO activity_logs(id,actor_user_id,action,resource_type,resource_id,details_json,ip_address) VALUES(?1,?2,?3,?4,?5,?6,?7)").bind(id(), c.get("admin").id, action, resourceType, resourceId || null, json(details), c.req.header("CF-Connecting-IP") || null).run();
+const MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/svg+xml", "application/pdf"]);
+const MEDIA_FOLDERS = new Set(["products", "categories", "banners", "cms", "homepage", "blog", "seo", "general"]);
+const mediaFolder = (value) => {
+  const folder = String(value || "general").trim().toLowerCase();
+  return MEDIA_FOLDERS.has(folder) ? folder : "general";
+};
+const mediaExtension = (file) => {
+  const fromName = file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const defaults = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/svg+xml": "svg", "application/pdf": "pdf" };
+  return fromName || defaults[file.type] || "bin";
+};
+const assertMediaFile = (file, maxSize = 12_000_000) => {
+  if (!(file instanceof File) || !MEDIA_TYPES.has(file.type) || file.size > maxSize) {
+    throw new HTTPError(400, "Upload a JPG, JPEG, PNG, WEBP, SVG or PDF file under 12 MB.");
+  }
+};
+const assertMediaSignature = (file, bytes) => {
+  const head = new Uint8Array(bytes.slice(0, 16));
+  const ascii = new TextDecoder().decode(bytes.slice(0, Math.min(bytes.byteLength, 4096))).trimStart();
+  const valid = file.type === "image/jpeg" ? head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff
+    : file.type === "image/png" ? head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47
+      : file.type === "image/webp" ? ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP"
+        : file.type === "application/pdf" ? ascii.startsWith("%PDF-")
+          : file.type === "image/svg+xml" ? /^(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(ascii) && !/<script|on[a-z]+\s*=|javascript\s*:/i.test(ascii)
+            : false;
+  if (!valid) throw new HTTPError(400, "The file contents do not match the selected media type or contain unsafe SVG markup.");
+};
+const usageExpression = `(SELECT COUNT(*) FROM product_media pm WHERE pm.media_id=m.id)
+  +(SELECT COUNT(*) FROM packaging_assets pa WHERE pa.media_id=m.id)
+  +(SELECT COUNT(*) FROM menu_items mi WHERE mi.media_id=m.id)
+  +(SELECT COUNT(*) FROM products p WHERE p.image_url=m.url OR p.detail_image_url=m.url)
+  +(SELECT COUNT(*) FROM categories c WHERE c.image_url=m.url OR c.hero_image_url=m.url OR c.banner_image_url=m.url OR c.thumbnail_url=m.url)
+  +(SELECT COUNT(*) FROM banners b WHERE b.image_url=m.url)
+  +(SELECT COUNT(*) FROM digital_content d WHERE d.image_url=m.url)
+  +(SELECT COUNT(*) FROM cms_entries ce WHERE instr(ce.content_json,m.url)>0 OR instr(ce.seo_json,m.url)>0)
+  +(SELECT COUNT(*) FROM cms_versions cv WHERE instr(cv.snapshot_json,m.url)>0)
+  +(SELECT COUNT(*) FROM homepage_sections hs WHERE instr(hs.content_json,m.url)>0)
+  +(SELECT COUNT(*) FROM seo_entries se WHERE instr(se.open_graph_json,m.url)>0 OR instr(se.twitter_json,m.url)>0)
+  +(SELECT COUNT(*) FROM settings s WHERE instr(s.value_json,m.url)>0)`;
+const mediaUsage = async (c, asset) => {
+  const queries = [
+    ["Products", "SELECT COUNT(*) count FROM products WHERE image_url=?1 OR detail_image_url=?1"],
+    ["Product galleries", "SELECT COUNT(*) count FROM product_media WHERE media_id=?1", true],
+    ["Packaging", "SELECT COUNT(*) count FROM packaging_assets WHERE media_id=?1", true],
+    ["Categories", "SELECT COUNT(*) count FROM categories WHERE image_url=?1 OR hero_image_url=?1 OR banner_image_url=?1 OR thumbnail_url=?1"],
+    ["Banners", "SELECT COUNT(*) count FROM banners WHERE image_url=?1"],
+    ["Digital platform", "SELECT COUNT(*) count FROM digital_content WHERE image_url=?1"],
+    ["CMS entries", "SELECT COUNT(*) count FROM cms_entries WHERE instr(content_json,?1)>0 OR instr(seo_json,?1)>0"],
+    ["CMS version history", "SELECT COUNT(*) count FROM cms_versions WHERE instr(snapshot_json,?1)>0"],
+    ["Homepage", "SELECT COUNT(*) count FROM homepage_sections WHERE instr(content_json,?1)>0"],
+    ["SEO", "SELECT COUNT(*) count FROM seo_entries WHERE instr(open_graph_json,?1)>0 OR instr(twitter_json,?1)>0"],
+    ["Settings", "SELECT COUNT(*) count FROM settings WHERE instr(value_json,?1)>0"],
+    ["Menus", "SELECT COUNT(*) count FROM menu_items WHERE media_id=?1", true],
+  ];
+  const results = await c.env.DB.batch(queries.map(([, query, usesId]) => c.env.DB.prepare(query).bind(usesId ? asset.id : asset.url)));
+  const locations = queries.map(([label], index) => ({ label, count: Number(results[index].results[0]?.count || 0) })).filter((item) => item.count);
+  return { count: locations.reduce((sum, item) => sum + item.count, 0), locations };
+};
 
 app.use("/api/admin/*", async (c, next) => {
   const admin = await cmsUser(c);
   if (!canAccess(admin.role, c.req.path, c.req.method)) throw new HTTPError(403, "Your role cannot perform this action.");
+  if (admin.mustChangePassword && c.req.path !== "/api/admin/account/password") throw new HTTPError(403, "Password change required.");
   c.set("admin", admin);
   await next();
 });
@@ -271,7 +360,7 @@ app.patch("/api/admin/account/password", async (c) => {
   const stored=await c.env.DB.prepare("SELECT password_hash,password_salt FROM users WHERE id=?1").bind(admin.id).first();
   if(!stored?.password_hash||!(await verifyPassword(String(data.currentPassword||""),stored.password_salt,stored.password_hash)))throw new HTTPError(400,"Current password is incorrect.");
   const password=await hashPassword(String(data.newPassword));
-  await c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,must_change_password=0,updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(password.hash,password.salt,admin.id).run();
+  await c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,must_change_password=0,session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(password.hash,password.salt,admin.id).run();
   await audit(c,"password_changed","user",admin.id);
   return c.json({ok:true});
 });
@@ -309,6 +398,60 @@ app.get("/api/admin/analytics/overview", async (c) => {
   return c.json({ monthly: monthly.results, bestSellingProducts: products.results, topCategories: categories.results, conversionRate: sessionRow.sessions ? sessionRow.orders / sessionRow.sessions * 100 : 0 });
 });
 app.get("/api/admin/inventory/:id/history", async (c) => c.json((await c.env.DB.prepare("SELECT h.*,u.name actor_name FROM inventory_history h LEFT JOIN users u ON u.id=h.actor_user_id WHERE h.variant_id=?1 ORDER BY h.created_at DESC LIMIT 250").bind(c.req.param("id")).all()).results));
+app.get("/api/admin/media-library", async (c) => {
+  const search = String(c.req.query("search") || "").trim().slice(0, 100);
+  const folder = String(c.req.query("folder") || "").trim().toLowerCase();
+  const type = String(c.req.query("type") || "").trim().toLowerCase();
+  const sort = String(c.req.query("sort") || "newest");
+  const offset = Math.max(0, Number.parseInt(c.req.query("cursor") || "0", 10) || 0);
+  const limit = Math.min(60, Math.max(12, Number.parseInt(c.req.query("limit") || "30", 10) || 30));
+  const clauses = []; const params = [];
+  if (search) { clauses.push("(m.file_name LIKE ? OR m.alt_text LIKE ?)"); params.push(`%${search}%`, `%${search}%`); }
+  if (folder && MEDIA_FOLDERS.has(folder)) { clauses.push("m.folder=?"); params.push(folder); }
+  if (type === "images") clauses.push("m.mime_type LIKE 'image/%'");
+  if (type === "documents") clauses.push("m.mime_type='application/pdf'");
+  const order = {
+    newest: "m.created_at DESC", oldest: "m.created_at ASC", name: "m.file_name COLLATE NOCASE ASC",
+    largest: "m.size_bytes DESC", smallest: "m.size_bytes ASC",
+  }[sort] || "m.created_at DESC";
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const [assets, count] = await c.env.DB.batch([
+    c.env.DB.prepare(`SELECT m.*,u.name uploaded_by_name,(${usageExpression}) usage_count
+      FROM media_assets m LEFT JOIN users u ON u.id=m.created_by ${where}
+      ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...params, limit + 1, offset),
+    c.env.DB.prepare(`SELECT COUNT(*) total FROM media_assets m ${where}`).bind(...params),
+  ]);
+  const rows = assets.results.slice(0, limit);
+  return c.json({
+    assets: rows,
+    nextCursor: assets.results.length > limit ? String(offset + limit) : null,
+    total: Number(count.results[0]?.total || 0),
+  });
+});
+app.get("/api/admin/media/:id/usage", async (c) => {
+  const asset = await c.env.DB.prepare("SELECT id,url FROM media_assets WHERE id=?1").bind(c.req.param("id")).first();
+  if (!asset) throw new HTTPError(404, "Media not found.");
+  return c.json(await mediaUsage(c, asset));
+});
+app.get("/api/admin/media/:id/download", async (c) => {
+  const asset = await c.env.DB.prepare("SELECT key,file_name,mime_type FROM media_assets WHERE id=?1").bind(c.req.param("id")).first();
+  if (!asset) throw new HTTPError(404, "Media not found.");
+  const object = await c.env.MEDIA.get(asset.key);
+  if (!object?.body) throw new HTTPError(404, "Stored media object not found.");
+  const safeName = asset.file_name.replace(/[^\x20-\x7e]|[\r\n"]/g, "_");
+  const encodedName = encodeURIComponent(asset.file_name.replace(/[\r\n]/g, "_"));
+  return new Response(object.body, { headers: { "Content-Type": asset.mime_type, "Content-Disposition": `attachment; filename="${safeName}"; filename*=UTF-8''${encodedName}`, ETag: object.httpEtag } });
+});
+app.patch("/api/admin/media/:id", async (c) => {
+  const data = await body(c);
+  const current = await c.env.DB.prepare("SELECT * FROM media_assets WHERE id=?1").bind(c.req.param("id")).first();
+  if (!current) throw new HTTPError(404, "Media not found.");
+  const folder = data.folder === undefined ? current.folder : mediaFolder(data.folder);
+  const altText = data.altText === undefined ? current.alt_text : String(data.altText || "").trim().slice(0, 300) || null;
+  await c.env.DB.prepare("UPDATE media_assets SET folder=?1,alt_text=?2,updated_at=CURRENT_TIMESTAMP WHERE id=?3").bind(folder, altText, current.id).run();
+  await audit(c, "organized", "media", current.id, { folder, altText });
+  return c.json({ ...current, folder, alt_text: altText });
+});
 app.get("/api/admin/:resource", async (c) => {
   const resource = c.req.param("resource");
   const queries = {
@@ -427,6 +570,13 @@ app.post("/api/admin/products", async (c) => {
     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
     ON CONFLICT(id) DO UPDATE SET name=excluded.name,sku=excluded.sku,price_paise=excluded.price_paise,compare_at_price_paise=excluded.compare_at_price_paise,mrp_paise=excluded.mrp_paise,discount_basis_points=excluded.discount_basis_points,festival_price_paise=excluded.festival_price_paise,bulk_price_paise=excluded.bulk_price_paise,wholesale_price_paise=excluded.wholesale_price_paise,stock=excluded.stock,low_stock_threshold=excluded.low_stock_threshold,weight_grams=excluded.weight_grams,is_default=excluded.is_default,active=excluded.active,updated_at=CURRENT_TIMESTAMP`)
     .bind(variant.id||id(),productId,variant.name,variant.sku,Number(variant.pricePaise)||0,variant.compareAtPricePaise||null,variant.mrpPaise||null,Number(variant.discountBasisPoints)||0,variant.festivalPricePaise||null,variant.bulkPricePaise||null,variant.wholesalePricePaise||null,Math.max(0,Number(variant.stock)||0),Math.max(0,Number(variant.lowStockThreshold)||5),variant.weightGrams||null,variant.isDefault?1:0,variant.active===false?0:1).run();
+  if (Array.isArray(data.media)) {
+    const validMedia = data.media.filter((item) => item.mediaId && ["hero","gallery","hover","lifestyle"].includes(item.mediaType || "gallery"));
+    await c.env.DB.batch([
+      c.env.DB.prepare("DELETE FROM product_media WHERE product_id=?1").bind(productId),
+      ...validMedia.map((item, index) => c.env.DB.prepare("INSERT INTO product_media(id,product_id,media_id,media_type,sort_order) VALUES(?1,?2,?3,?4,?5)").bind(id(),productId,item.mediaId,item.mediaType||"gallery",Number(item.sortOrder)||index*10)),
+    ]);
+  }
   await Promise.all([audit(c, data.id ? "updated" : "created", "product", productId, { name: data.name }), c.env.DB.prepare("INSERT INTO analytics_events(id,user_id,event_name,properties_json) VALUES(?1,?2,'admin_product_save',?3)").bind(id(), admin.id, json({ productId })).run()]);
   return c.json({ id: productId });
 });
@@ -514,35 +664,56 @@ app.patch("/api/admin/inventory/bulk", async (c) => {
 });
 app.post("/api/admin/uploads", async (c) => {
   const form = await c.req.formData(); const file = form.get("file");
-  const allowed = file instanceof File && (file.type.startsWith("image/") || file.type.startsWith("video/") || file.type === "application/pdf" || file.type.startsWith("text/") || file.type.includes("document"));
-  const maxSize = file instanceof File && file.type.startsWith("video/") ? 50_000_000 : 12_000_000;
-  if (!allowed || file.size > maxSize) throw new HTTPError(400, "Upload an image, video or document within the allowed size.");
-  const folder = String(form.get("folder") || "general").replace(/[^a-z0-9_-]/gi, "").slice(0, 40) || "general";
-  const extension = file.name.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || (file.type === "application/pdf" ? "pdf" : "webp");
+  assertMediaFile(file);
+  const folder = mediaFolder(form.get("folder"));
+  const extension = mediaExtension(file);
   const key = `${folder}/${crypto.randomUUID()}.${extension}`;
-  await c.env.MEDIA.put(key, file.stream(), { httpMetadata: { contentType: file.type, cacheControl: "public,max-age=31536000,immutable" } });
+  const fileBytes = await file.arrayBuffer();
+  assertMediaSignature(file, fileBytes);
+  await c.env.MEDIA.put(key, fileBytes, { httpMetadata: { contentType: file.type, cacheControl: "public,max-age=300,must-revalidate" } });
+  const thumbnail = form.get("thumbnail");
+  let thumbnailKey = null; let thumbnailUrl = null;
+  if (thumbnail instanceof File && thumbnail.type === "image/webp" && thumbnail.size <= 1_000_000) {
+    thumbnailKey = `${folder}/thumbnails/${crypto.randomUUID()}.webp`;
+    await c.env.MEDIA.put(thumbnailKey, await thumbnail.arrayBuffer(), { httpMetadata: { contentType: "image/webp", cacheControl: "public,max-age=300,must-revalidate" } });
+    thumbnailUrl = `${new URL(c.req.url).origin}/api/media/${thumbnailKey}`;
+  }
   const mediaId = id(); const url = `${new URL(c.req.url).origin}/api/media/${key}`;
-  await c.env.DB.prepare("INSERT INTO media_assets(id,key,url,file_name,folder,mime_type,size_bytes,alt_text,created_by) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)").bind(mediaId,key,url,file.name,folder,file.type,file.size,String(form.get("altText")||"")||null,c.get("admin").id).run();
+  const width = Math.max(0, Number.parseInt(String(form.get("width") || "0"), 10) || 0) || null;
+  const height = Math.max(0, Number.parseInt(String(form.get("height") || "0"), 10) || 0) || null;
+  await c.env.DB.prepare("INSERT INTO media_assets(id,key,url,file_name,folder,mime_type,size_bytes,width,height,alt_text,thumbnail_key,thumbnail_url,created_by) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)").bind(mediaId,key,url,file.name,folder,file.type,file.size,width,height,String(form.get("altText")||"").trim()||null,thumbnailKey,thumbnailUrl,c.get("admin").id).run();
   await audit(c, "uploaded", "media", mediaId, { fileName: file.name, key });
-  return c.json({ id: mediaId, key, url, fileName: file.name }, 201);
+  return c.json({ id: mediaId, key, url, fileName: file.name, file_name: file.name, folder, mime_type: file.type, size_bytes: file.size, width, height, alt_text: String(form.get("altText")||"").trim()||null, thumbnail_key: thumbnailKey, thumbnail_url: thumbnailUrl, usage_count: 0 }, 201);
 });
 app.put("/api/admin/media/:id/replace", async (c) => {
   const current=await c.env.DB.prepare("SELECT * FROM media_assets WHERE id=?1").bind(c.req.param("id")).first();
   if(!current)throw new HTTPError(404,"Media not found.");
   const form=await c.req.formData(); const file=form.get("file");
-  if(!(file instanceof File)||file.size>50_000_000)throw new HTTPError(400,"Choose a replacement under 50 MB.");
-  const extension=file.name.split(".").pop()?.replace(/[^a-z0-9]/gi,"")||"bin"; const key=`${current.folder}/${crypto.randomUUID()}.${extension}`;
-  await c.env.MEDIA.put(key,file.stream(),{httpMetadata:{contentType:file.type,cacheControl:"public,max-age=31536000,immutable"}});
-  const url=`${new URL(c.req.url).origin}/api/media/${key}`;
-  await c.env.DB.prepare("UPDATE media_assets SET key=?1,url=?2,file_name=?3,mime_type=?4,size_bytes=?5,updated_at=CURRENT_TIMESTAMP WHERE id=?6").bind(key,url,file.name,file.type,file.size,current.id).run();
-  await c.env.MEDIA.delete(current.key);
-  await audit(c,"replaced","media",current.id,{oldKey:current.key,key});
-  return c.json({id:current.id,key,url,fileName:file.name});
+  assertMediaFile(file);
+  const fileBytes = await file.arrayBuffer();
+  assertMediaSignature(file, fileBytes);
+  await c.env.MEDIA.put(current.key,fileBytes,{httpMetadata:{contentType:file.type,cacheControl:"public,max-age=300,must-revalidate"}});
+  const thumbnail = form.get("thumbnail");
+  let thumbnailKey = current.thumbnail_key; let thumbnailUrl = current.thumbnail_url;
+  if (thumbnail instanceof File && thumbnail.type === "image/webp" && thumbnail.size <= 1_000_000) {
+    thumbnailKey ||= `${current.folder}/thumbnails/${crypto.randomUUID()}.webp`;
+    await c.env.MEDIA.put(thumbnailKey,await thumbnail.arrayBuffer(),{httpMetadata:{contentType:"image/webp",cacheControl:"public,max-age=300,must-revalidate"}});
+    thumbnailUrl = `${new URL(c.req.url).origin}/api/media/${thumbnailKey}`;
+  } else if (!file.type.startsWith("image/") && thumbnailKey) {
+    await c.env.MEDIA.delete(thumbnailKey); thumbnailKey = null; thumbnailUrl = null;
+  }
+  const width = Math.max(0, Number.parseInt(String(form.get("width") || "0"), 10) || 0) || null;
+  const height = Math.max(0, Number.parseInt(String(form.get("height") || "0"), 10) || 0) || null;
+  await c.env.DB.prepare("UPDATE media_assets SET file_name=?1,mime_type=?2,size_bytes=?3,width=?4,height=?5,thumbnail_key=?6,thumbnail_url=?7,updated_at=CURRENT_TIMESTAMP WHERE id=?8").bind(file.name,file.type,file.size,width,height,thumbnailKey,thumbnailUrl,current.id).run();
+  await audit(c,"replaced","media",current.id,{key:current.key,fileName:file.name});
+  return c.json({...current,file_name:file.name,mime_type:file.type,size_bytes:file.size,width,height,thumbnail_key:thumbnailKey,thumbnail_url:thumbnailUrl});
 });
 app.delete("/api/admin/media/:id", async (c) => {
-  const media = await c.env.DB.prepare("SELECT key FROM media_assets WHERE id=?1").bind(c.req.param("id")).first();
+  const media = await c.env.DB.prepare("SELECT id,key,url,thumbnail_key FROM media_assets WHERE id=?1").bind(c.req.param("id")).first();
   if (!media) throw new HTTPError(404, "Media not found.");
-  await c.env.MEDIA.delete(media.key);
+  const usage = await mediaUsage(c, media);
+  if (usage.count) throw new HTTPError(409, `This asset is currently used in ${usage.count} location${usage.count === 1 ? "" : "s"}.`);
+  await c.env.MEDIA.delete([media.key, media.thumbnail_key].filter(Boolean));
   await c.env.DB.prepare("DELETE FROM media_assets WHERE id=?1").bind(c.req.param("id")).run();
   await audit(c, "deleted", "media", c.req.param("id"), { key: media.key });
   return c.json({ ok: true });
@@ -566,7 +737,12 @@ app.post("/api/admin/digital", async (c) => {
 });
 app.post("/api/admin/seo", async (c) => {
   const data=await body(c); const seoId=data.id||id();
-  await c.env.DB.prepare("INSERT INTO seo_entries(id,route,meta_title,meta_description,canonical_url,open_graph_json,twitter_json,robots) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET route=excluded.route,meta_title=excluded.meta_title,meta_description=excluded.meta_description,canonical_url=excluded.canonical_url,open_graph_json=excluded.open_graph_json,twitter_json=excluded.twitter_json,robots=excluded.robots,updated_at=CURRENT_TIMESTAMP").bind(seoId,data.route,data.metaTitle||null,data.metaDescription||null,data.canonicalUrl||null,json(data.openGraph||{}),json(data.twitter||{}),data.robots||"index,follow").run();
+  let openGraph = data.openGraph || {};
+  if (!data.openGraph && data.openGraphJson) { try { openGraph = JSON.parse(data.openGraphJson); } catch { openGraph = {}; } }
+  if (data.openGraphImageUrl !== undefined) openGraph = { ...openGraph, image: data.openGraphImageUrl || undefined };
+  let twitter = data.twitter || {};
+  if (!data.twitter && data.twitterJson) { try { twitter = JSON.parse(data.twitterJson); } catch { twitter = {}; } }
+  await c.env.DB.prepare("INSERT INTO seo_entries(id,route,meta_title,meta_description,canonical_url,open_graph_json,twitter_json,robots) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(id) DO UPDATE SET route=excluded.route,meta_title=excluded.meta_title,meta_description=excluded.meta_description,canonical_url=excluded.canonical_url,open_graph_json=excluded.open_graph_json,twitter_json=excluded.twitter_json,robots=excluded.robots,updated_at=CURRENT_TIMESTAMP").bind(seoId,data.route,data.metaTitle||null,data.metaDescription||null,data.canonicalUrl||null,json(openGraph),json(twitter),data.robots||"index,follow").run();
   await audit(c,data.id?"updated":"created","seo",seoId,{route:data.route});
   return c.json({id:seoId});
 });

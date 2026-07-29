@@ -1,7 +1,7 @@
 import {
   Activity, BarChart3, Boxes, ChevronDown, ClipboardList, FileSearch, FileText, Globe2, Home,
   Image, LayoutDashboard, LogOut, Menu, MessageSquare, Moon, Package, Plus, Search,
-  Settings, ShoppingBasket, Tags, TicketPercent, Trash2, Upload, Users, X,
+  Settings, ShoppingBasket, Tags, TicketPercent, Trash2, Users, X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
@@ -9,6 +9,10 @@ import { useAuth } from "../contexts/AuthContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 import { apiFetch } from "../services/api";
 import ContentWorkspace from "../components/admin/ContentWorkspace";
+import AdminProfileMenu from "../components/admin/AdminProfileMenu";
+import MediaLibrary from "../components/admin/MediaLibrary";
+import { JsonMediaTextarea, MediaField } from "../components/admin/MediaPicker";
+import { formatRole, isAdminRole } from "../utils/roles";
 
 const navigation = [
   ["Overview", [["dashboard", LayoutDashboard, "Dashboard"], ["analytics", BarChart3, "Analytics"]]],
@@ -17,9 +21,8 @@ const navigation = [
   ["System", [["settings", Settings, "Site settings"], ["activity", Activity, "Activity logs"]]],
 ];
 const allSections = navigation.flatMap(([, items]) => items);
-const ADMIN_ROLES = new Set(["SUPER_ADMIN", "ADMIN"]);
 const money = (paise = 0) => `₹${(Number(paise) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-const labelFor = (value) => value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+const labelFor = formatRole;
 const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 
 const columns = {
@@ -43,7 +46,7 @@ const editorFields = {
   categories: [
     ["name", "Category name", "text", true], ["slug", "Slug", "text", true], ["shortDescription", "Short description", "textarea"],
     ["longDescription", "Long description", "textarea"], ["seoTitle", "SEO title"], ["seoDescription", "SEO description", "textarea"],
-    ["heroImageUrl", "Hero image URL"], ["bannerImageUrl", "Banner image URL"], ["thumbnailUrl", "Thumbnail URL"],
+    ["heroImageUrl", "Hero image", "media", false, [], "categories"], ["bannerImageUrl", "Banner image", "media", false, [], "categories"], ["thumbnailUrl", "Thumbnail", "media", false, [], "categories"],
     ["sortOrder", "Sort order", "number"], ["featured", "Featured category", "checkbox"], ["homepageVisible", "Show on homepage", "checkbox"],
     ["navigationVisible", "Show in navigation", "checkbox"], ["active", "Enabled", "checkbox"],
   ],
@@ -53,7 +56,7 @@ const editorFields = {
     ["expiresAt", "Expiry", "datetime-local"], ["usageLimit", "Usage limit", "number"], ["enabled", "Enabled", "checkbox"],
   ],
   banners: [
-    ["title", "Title", "text", true], ["subtitle", "Subtitle"], ["imageUrl", "Image URL", "url", true], ["linkUrl", "Link URL", "url"],
+    ["title", "Title", "text", true], ["subtitle", "Subtitle"], ["imageUrl", "Banner image", "media", true, [], "banners"], ["linkUrl", "Link URL", "url"],
     ["bannerType", "Placement", "select", true, ["homepage", "festival", "offer", "category"]],
     ["device", "Device", "select", true, ["both", "desktop", "mobile"]], ["startsAt", "Starts", "datetime-local"],
     ["endsAt", "Ends", "datetime-local"], ["sortOrder", "Sort order", "number"], ["active", "Enabled", "checkbox"],
@@ -61,12 +64,12 @@ const editorFields = {
   digital: [
     ["contentType", "Content type", "select", true, ["weather", "mandi", "scheme", "icar", "article"]],
     ["title", "Title", "text", true], ["slug", "Slug", "text", true], ["summary", "Summary", "textarea"], ["content", "Content", "textarea"],
-    ["imageUrl", "Image URL", "url"], ["sourceUrl", "Source URL", "url"], ["status", "Status", "select", true, ["draft", "published"]],
+    ["imageUrl", "Feature image", "media", false, [], "cms"], ["sourceUrl", "Source URL", "url"], ["status", "Status", "select", true, ["draft", "published"]],
     ["featured", "Featured", "checkbox"],
   ],
   seo: [
     ["route", "Route", "text", true], ["metaTitle", "Meta title"], ["metaDescription", "Meta description", "textarea"],
-    ["canonicalUrl", "Canonical URL", "url"], ["robots", "Robots", "select", true, ["index,follow", "noindex,follow", "noindex,nofollow"]],
+    ["canonicalUrl", "Canonical URL", "url"], ["openGraphImageUrl", "Social sharing image", "media", false, [], "seo"], ["robots", "Robots", "select", true, ["index,follow", "noindex,follow", "noindex,nofollow"]],
   ],
 };
 const defaults = {
@@ -92,6 +95,7 @@ export default function AdminPage({ initialModule = "dashboard" }) {
   useDocumentTitle("Commerce Admin");
 
   const load = async (module = active) => {
+    if (module === "media") { setError(""); setData([]); setBusy(false); return; }
     setBusy(true); setError("");
     try { setData(await apiFetch(`/api/admin/${module}`)); }
     catch (reason) { setError(reason.message); setData(null); }
@@ -99,12 +103,12 @@ export default function AdminPage({ initialModule = "dashboard" }) {
   };
   // The active module is an external data source; changing it intentionally starts a new request.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { if (user && ADMIN_ROLES.has(user.role)) load(active); }, [active, user]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (user && isAdminRole(user.role)) load(active); }, [active, user]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!notice) return undefined; const timer = setTimeout(() => setNotice(""), 3000); return () => clearTimeout(timer); }, [notice]);
 
   if (loading) return <div className="admin-gate"><span className="admin-spinner" />Checking secure access…</div>;
   if (!user) return <Navigate replace to="/admin/login" />;
-  if (!ADMIN_ROLES.has(user.role)) return <div className="admin-gate"><ShoppingBasket /><h1>Access denied</h1><p>You do not have administrator permissions.</p><Link to="/admin/logout">Sign out</Link></div>;
+  if (!isAdminRole(user.role)) return <Navigate replace to="/account" />;
 
   const title = allSections.find(([id]) => id === active)?.[2] || "Admin";
   const rows = Array.isArray(data) ? data : [];
@@ -149,7 +153,7 @@ export default function AdminPage({ initialModule = "dashboard" }) {
           <button type="button" className="admin-menu" onClick={() => setMobileNav(true)} aria-label="Open menu"><Menu /></button>
           <div className="admin-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search this workspace…" aria-label="Search" /><kbd>⌘ K</kbd></div>
           <button type="button" className="admin-icon-button" onClick={() => setDark((value) => !value)} aria-label="Toggle dark mode"><Moon /></button>
-          <div className="admin-role">{labelFor(user.role)}</div>
+          <AdminProfileMenu user={user} />
         </header>
         <div className="admin-content">
           <div className="admin-heading"><div><p>Commerce / {title}</p><h1>{title}</h1></div>{editable.has(active) && active !== "settings" && active !== "homepage" ? <button type="button" className="admin-primary" onClick={() => openEditor()}><Plus /> Add {active === "seo" ? "entry" : active.slice(0, -1)}</button> : null}</div>
@@ -158,12 +162,12 @@ export default function AdminPage({ initialModule = "dashboard" }) {
           {error ? <div className="admin-error" role="alert">{error}<button type="button" onClick={() => setError("")}><X /></button></div> : null}
           {busy && data === null ? <div className="admin-loading"><span className="admin-spinner" /> Loading workspace…</div> : null}
           {active === "dashboard" && data ? <Dashboard data={data} onNavigate={selectModule} /> : null}
-          {active === "media" ? <MediaLibrary rows={filtered} onReload={load} setError={setError} setNotice={setNotice} /> : null}
+          {active === "media" ? <MediaLibrary setError={setError} setNotice={setNotice} /> : null}
           {active === "content" && Array.isArray(data) ? <ContentWorkspace rows={filtered} onReload={load} setError={setError} setNotice={setNotice} /> : null}
           {active !== "dashboard" && active !== "media" && active !== "content" && Array.isArray(data) ? <DataTable module={active} rows={filtered} onEdit={openEditor} onDelete={remove} onReload={load} setError={setError} setNotice={setNotice} /> : null}
         </div>
       </main>
-      {editor ? <Editor module={active} value={editor} onClose={() => setEditor(null)} onSaved={async () => { setEditor(null); setNotice("Changes saved"); await load(); }} setError={setError} /> : null}
+      {editor ? <Editor module={active} value={editor} onClose={() => setEditor(null)} onSaved={async () => { setEditor(null); setNotice("Changes saved"); await load(); }} setError={setError} setNotice={setNotice} /> : null}
     </div>
   );
 }
@@ -196,7 +200,7 @@ function DataTable({ module, rows, onEdit, onDelete, onReload, setError, setNoti
   const actions = (row) => {
     if (module === "orders") return <select className="admin-status-select" value={row.status} onChange={(event) => changeStatus(row, event.target.value)}>{["pending","confirmed","packed","shipped","delivered","cancelled","returned","refunded"].map((value)=><option key={value}>{value}</option>)}</select>;
     if (module === "inventory") return <StockEditor row={row} onSave={updateStock} />;
-    if (module === "customers") return <select className="admin-status-select" value={ADMIN_ROLES.has(row.role) ? row.role : ""} onChange={(event)=>event.target.value && saveRole(row,event.target.value)}><option value="">No admin access</option><option value="ADMIN">Admin</option><option value="SUPER_ADMIN">Super Admin</option></select>;
+    if (module === "customers") return <select className="admin-status-select" value={isAdminRole(row.role) ? row.role : ""} onChange={(event)=>event.target.value && saveRole(row,event.target.value)}><option value="">No admin access</option><option value="ADMIN">Admin</option><option value="SUPER_ADMIN">Super Admin</option></select>;
     if (module === "reviews") return <div className="admin-row-actions"><button type="button" onClick={()=>moderate(row,{status:row.status==="published"?"rejected":"published"})}>{row.status==="published"?"Reject":"Approve"}</button><button type="button" onClick={()=>moderate(row,{featured:!row.featured})}>{row.featured?"Unfeature":"Feature"}</button><button type="button" className="is-danger" onClick={()=>onDelete(row)}><Trash2 /></button></div>;
     if (!editable.has(module)) return null;
     return <div className="admin-row-actions"><button type="button" onClick={()=>onEdit(row)}>Edit</button>{module==="products"?<button type="button" onClick={()=>duplicate(row)}>Duplicate</button>:null}{["products","categories"].includes(module)?<button type="button" className="is-danger" onClick={()=>onDelete(row)}><Trash2 /></button>:null}</div>;
@@ -207,22 +211,23 @@ function DataTable({ module, rows, onEdit, onDelete, onReload, setError, setNoti
 }
 function StockEditor({ row, onSave }) { const [stock, setStock] = useState(row.stock); return <div className="admin-stock-edit"><input type="number" min="0" value={stock} onChange={(event) => setStock(event.target.value)} /><button type="button" disabled={Number(stock) === Number(row.stock)} onClick={() => onSave(row, stock)}>Save</button></div>; }
 
-function Editor({ module, value, onClose, onSaved, setError }) {
+function Editor({ module, value, onClose, onSaved, setError, setNotice }) {
   const [form, setForm] = useState(value); const [busy, setBusy] = useState(false);
   const update = (key, next) => setForm((current) => ({ ...current, [key]: next }));
   const save = async (event) => {
     event.preventDefault(); setBusy(true);
     try {
       let path = `/api/admin/${module}`; let method = "POST"; let body = form;
+      if (module === "banners" && !form.imageUrl) throw new Error("Select a banner image from the Media Library.");
       if (module === "settings") { path = `/api/admin/settings/${form.key}`; method = "PUT"; try { body = JSON.parse(form.value_json); } catch { throw new Error("Setting value must be valid JSON."); } }
       if (module === "homepage") { path = `/api/admin/homepage/${form.id}`; method = "PUT"; body = { title: form.title, content: JSON.parse(form.content_json || "{}"), enabled: Boolean(form.enabled), sortOrder: Number(form.sort_order) }; }
       await apiFetch(path, { method, body: JSON.stringify(body) }); await onSaved();
     } catch (reason) { setError(reason.message); } finally { setBusy(false); }
   };
-  return <div className="admin-modal" role="dialog" aria-modal="true" aria-label={`Edit ${module}`}><button type="button" className="admin-modal__scrim" onClick={onClose} aria-label="Close" /><form onSubmit={save}><header><div><p>{form.id ? "Edit record" : "New record"}</p><h2>{module === "products" ? "Product workspace" : labelFor(module)}</h2></div><button type="button" onClick={onClose} aria-label="Close"><X /></button></header><div className="admin-editor-body">{module === "products" ? <ProductFields form={form} update={update} /> : module === "settings" ? <><Field field={["key", "Setting key"]} form={form} update={update} disabled={Boolean(form.key)} /><Field field={["value_json", "JSON value", "textarea", true]} form={form} update={update} /></> : module === "homepage" ? <><Field field={["title", "Section title"]} form={form} update={update} /><Field field={["content_json", "Content (JSON)", "textarea", true]} form={form} update={update} /><Field field={["enabled", "Enabled", "checkbox"]} form={form} update={update} /><Field field={["sort_order", "Sort order", "number"]} form={form} update={update} /></> : <div className="admin-form-grid">{(editorFields[module] || []).map((field) => <Field key={field[0]} field={field} form={form} update={update} />)}</div>}</div><footer><button type="button" onClick={onClose}>Cancel</button><button className="admin-primary" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button></footer></form></div>;
+  return <div className="admin-modal" role="dialog" aria-modal="true" aria-label={`Edit ${module}`}><button type="button" className="admin-modal__scrim" onClick={onClose} aria-label="Close" /><form onSubmit={save}><header><div><p>{form.id ? "Edit record" : "New record"}</p><h2>{module === "products" ? "Product workspace" : labelFor(module)}</h2></div><button type="button" onClick={onClose} aria-label="Close"><X /></button></header><div className="admin-editor-body">{module === "products" ? <ProductFields form={form} update={update} setError={setError} setNotice={setNotice} /> : module === "settings" ? <><Field field={["key", "Setting key"]} form={form} update={update} disabled={Boolean(form.key)} /><Field field={["value_json", "JSON value", "textarea", true]} form={form} update={update} /></> : module === "homepage" ? <><Field field={["title", "Section title"]} form={form} update={update} /><JsonMediaTextarea label="Content (JSON)" value={form.content_json || "{}"} onChange={(next) => update("content_json", next)} folder="homepage" help="Place the cursor at an image value, then insert an existing or newly uploaded asset." setError={setError} setNotice={setNotice} /><Field field={["enabled", "Enabled", "checkbox"]} form={form} update={update} /><Field field={["sort_order", "Sort order", "number"]} form={form} update={update} /></> : <div className="admin-form-grid">{(editorFields[module] || []).map((field) => <Field key={field[0]} field={field} form={form} update={update} setError={setError} setNotice={setNotice} />)}</div>}</div><footer><button type="button" onClick={onClose}>Cancel</button><button className="admin-primary" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button></footer></form></div>;
 }
 
-function ProductFields({ form, update }) {
+function ProductFields({ form, update, setError, setNotice }) {
   const variants = form.variants || [];
   const setVariant = (index, key, value) => update("variants", variants.map((variant, position) => position === index ? { ...variant, [key]: value } : variant));
   const addVariant = () => update("variants", [...variants, { name: "250 gm", sku: "", pricePaise: 0, mrpPaise: 0, stock: 0, lowStockThreshold: 5, active: true }]);
@@ -231,26 +236,18 @@ function ProductFields({ form, update }) {
     ["subcategory", "Subcategory"], ["description", "Description", "textarea"], ["benefits", "Benefits", "textarea"], ["ingredients", "Ingredients", "textarea"],
     ["nutrition", "Nutrition", "textarea"], ["storage", "Storage"], ["shelfLife", "Shelf life"], ["countryOfOrigin", "Country of origin"],
     ["hsnCode", "HSN code"], ["gstBasisPoints", "GST (basis points)", "number"], ["barcode", "Barcode"], ["status", "Status", "select", true, ["draft", "published", "archived"]],
-    ["imageUrl", "Hero image URL"], ["detailImageUrl", "Detail image URL"], ["seoTitle", "SEO title"], ["seoDescription", "SEO description", "textarea"],
+    ["seoTitle", "SEO title"], ["seoDescription", "SEO description", "textarea"],
     ["featured", "Featured", "checkbox"], ["bestSeller", "Best seller", "checkbox"], ["newArrival", "New arrival", "checkbox"], ["active", "Enabled", "checkbox"],
   ];
-  return <><div className="admin-form-grid"><label>Category<select required value={form.categoryId || ""} onChange={(event) => update("categoryId", event.target.value)}><option value="">Select category</option>{(form._categories || []).map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label>{productFields.map((field) => <Field key={field[0]} field={field} form={form} update={(key, value) => { update(key, value); if (key === "name" && !form.id) update("slug", slugify(value)); }} />)}</div><div className="admin-variant-heading"><div><p>Pricing & inventory</p><h3>Variants</h3></div><button type="button" onClick={addVariant}><Plus /> Add variant</button></div>{variants.map((variant, index) => <div className="admin-variant" key={variant.id || index}>{[["name", "Variant"], ["sku", "SKU"], ["pricePaise", "Selling price"], ["mrpPaise", "MRP"], ["festivalPricePaise", "Festival"], ["bulkPricePaise", "Bulk"], ["wholesalePricePaise", "Wholesale"], ["stock", "Stock"], ["weightGrams", "Weight (g)"]].map(([key, label], position) => <label key={key}>{label}<input required={position < 2} type={position > 1 ? "number" : "text"} value={variant[key] ?? variant[toSnake(key)] ?? ""} onChange={(event) => setVariant(index, key, event.target.value)} /></label>)}<button type="button" className="is-danger" onClick={() => update("variants", variants.filter((_, position) => position !== index))}><Trash2 /></button></div>)}</>;
+  const gallery = (form.media || []).filter((item) => (item.mediaType || item.media_type) === "gallery").map((item) => ({ ...item, id: item.mediaId || item.media_id, url: item.url, file_name: item.file_name }));
+  return <><div className="admin-form-grid"><label>Category<select required value={form.categoryId || ""} onChange={(event) => update("categoryId", event.target.value)}><option value="">Select category</option>{(form._categories || []).map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label>{productFields.map((field) => <Field key={field[0]} field={field} form={form} update={(key, value) => { update(key, value); if (key === "name" && !form.id) update("slug", slugify(value)); }} />)}<MediaField label="Hero image" value={form.imageUrl} onChange={(assetUrl) => update("imageUrl", assetUrl)} folder="products" required setError={setError} setNotice={setNotice} /><MediaField label="Detail image" value={form.detailImageUrl} onChange={(assetUrl) => update("detailImageUrl", assetUrl)} folder="products" setError={setError} setNotice={setNotice} /><MediaField label="Gallery images" value={gallery} multiple returnAsset onChange={(assets) => update("media", [...(form.media || []).filter((item) => (item.mediaType || item.media_type) !== "gallery"), ...assets.map((asset, index) => ({ mediaId: asset.id, mediaType: "gallery", sortOrder: index * 10, ...asset }))])} folder="products" setError={setError} setNotice={setNotice} /></div><div className="admin-variant-heading"><div><p>Pricing & inventory</p><h3>Variants</h3></div><button type="button" onClick={addVariant}><Plus /> Add variant</button></div>{variants.map((variant, index) => <div className="admin-variant" key={variant.id || index}>{[["name", "Variant"], ["sku", "SKU"], ["pricePaise", "Selling price"], ["mrpPaise", "MRP"], ["festivalPricePaise", "Festival"], ["bulkPricePaise", "Bulk"], ["wholesalePricePaise", "Wholesale"], ["stock", "Stock"], ["weightGrams", "Weight (g)"]].map(([key, label], position) => <label key={key}>{label}<input required={position < 2} type={position > 1 ? "number" : "text"} value={variant[key] ?? variant[toSnake(key)] ?? ""} onChange={(event) => setVariant(index, key, event.target.value)} /></label>)}<button type="button" className="is-danger" onClick={() => update("variants", variants.filter((_, position) => position !== index))}><Trash2 /></button></div>)}</>;
 }
 
-function Field({ field, form, update, disabled = false }) {
-  const [key, label, type = "text", required = false, options = []] = field; const value = form[key] ?? "";
+function Field({ field, form, update, disabled = false, setError, setNotice }) {
+  const [key, label, type = "text", required = false, options = [], folder = "general"] = field; const value = form[key] ?? "";
   if (type === "checkbox") return <label className="admin-switch"><input type="checkbox" checked={Boolean(value)} onChange={(event) => update(key, event.target.checked)} /><span />{label}</label>;
+  if (type === "media") return <MediaField label={label} value={value} required={required} folder={folder} onChange={(next) => update(key, next)} setError={setError} setNotice={setNotice} />;
   return <label className={type === "textarea" ? "is-wide" : ""}>{label}{type === "select" ? <select required={required} value={value} onChange={(event) => update(key, event.target.value)}>{options.map((option) => <option key={option} value={option}>{labelFor(option)}</option>)}</select> : type === "textarea" ? <textarea rows="4" required={required} value={value} onChange={(event) => update(key, event.target.value)} /> : <input disabled={disabled} type={type} required={required} value={value} onChange={(event) => update(key, event.target.value)} />}</label>;
-}
-
-function MediaLibrary({ rows, onReload, setError, setNotice }) {
-  const inputRef = useRef(null); const [uploading, setUploading] = useState(false); const [folder, setFolder] = useState("general");
-  const upload = async (event) => { const files = [...event.target.files]; if (!files.length) return; setUploading(true); try { for (const file of files) { const prepared = await optimizeImage(file); const body = new FormData(); body.append("file", prepared); body.append("folder", folder); await apiFetch("/api/admin/uploads", { method: "POST", body }); } setNotice(`${files.length} asset${files.length > 1 ? "s" : ""} uploaded and optimized`); await onReload(); } catch (reason) { setError(reason.message); } finally { setUploading(false); event.target.value = ""; } };
-  const remove = async (asset) => { if (!window.confirm(`Delete ${asset.file_name}? This cannot be undone.`)) return; try { await apiFetch(`/api/admin/media/${asset.id}`, { method: "DELETE" }); setNotice("Asset deleted"); await onReload(); } catch (reason) { setError(reason.message); } };
-  const putReplacement=async(asset,file,message)=>{setUploading(true);try{const prepared=await optimizeImage(file);const body=new FormData();body.append("file",prepared);await apiFetch(`/api/admin/media/${asset.id}/replace`,{method:"PUT",body});setNotice(message);await onReload();}catch(reason){setError(reason.message);}finally{setUploading(false);}};
-  const replace = (asset) => { const picker=document.createElement("input"); picker.type="file"; picker.accept="image/*,video/*,.pdf,.doc,.docx,.txt"; picker.onchange=()=>{const file=picker.files?.[0];if(file)putReplacement(asset,file,"Asset replaced");};picker.click();};
-  const crop=async(asset)=>{const ratio=window.prompt("Crop aspect ratio: 1:1, 4:3 or 16:9","1:1");if(!ratio)return;try{const file=await cropImage(asset.url,ratio,asset.file_name);await putReplacement(asset,file,"Image cropped and saved as WebP");}catch(reason){setError(reason.message);}};
-  return <><div className="admin-media-toolbar"><label>Folder<select value={folder} onChange={(event) => setFolder(event.target.value)}><option>general</option><option>products</option><option>categories</option><option>banners</option><option>packaging</option><option>videos</option><option>documents</option></select></label><button type="button" className="admin-primary" disabled={uploading} onClick={() => inputRef.current?.click()}><Upload /> {uploading ? "Uploading…" : "Upload media"}</button><input ref={inputRef} type="file" hidden multiple accept="image/*,video/*,.pdf,.doc,.docx,.txt" onChange={upload} /></div>{rows.length ? <div className="admin-media-grid">{rows.map((asset) => <article key={asset.id}>{asset.mime_type.startsWith("image/") ? <img src={asset.url} alt={asset.alt_text || ""} loading="lazy" /> : asset.mime_type.startsWith("video/") ? <video src={asset.url} muted controls preload="metadata" /> : <div className="admin-pdf">{asset.mime_type==="application/pdf"?"PDF":"DOC"}</div>}<div><strong title={asset.file_name}>{asset.file_name}</strong><small>{asset.folder} · {(asset.size_bytes / 1024).toFixed(0)} KB</small><span><button type="button" onClick={()=>replace(asset)}>Replace</button>{asset.mime_type.startsWith("image/")?<button type="button" onClick={()=>crop(asset)}>Crop</button>:null}</span></div><button type="button" onClick={() => remove(asset)} aria-label="Delete asset"><Trash2 /></button></article>)}</div> : <section className="admin-panel"><Empty /></section>}</>;
 }
 
 function Status({ value }) { return <span className={`admin-status is-${value}`}>{labelFor(String(value))}</span>; }
@@ -270,25 +267,8 @@ function normalizeRow(module, row) {
   const result = { ...row };
   for (const [key, value] of Object.entries(row)) result[toCamel(key)] = ["active", "enabled", "featured", "best_seller", "new_arrival", "homepage_visible", "navigation_visible"].includes(key) ? Boolean(value) : value;
   if (module === "products" && row.variants) result.variants = row.variants.map((variant) => normalizeRow("variant", variant));
+  if (module === "seo") {
+    try { result.openGraphImageUrl = JSON.parse(row.open_graph_json || "{}").image || ""; } catch { result.openGraphImageUrl = ""; }
+  }
   return result;
-}
-async function optimizeImage(file) {
-  if (!file.type.startsWith("image/") || file.type === "image/svg+xml" || file.type === "image/webp") return file;
-  const bitmap = await createImageBitmap(file); const scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
-  const canvas = document.createElement("canvas"); canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
-  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height); bitmap.close();
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", .82));
-  return blob ? new File([blob], `${file.name.replace(/\.[^.]+$/, "")}.webp`, { type: "image/webp" }) : file;
-}
-async function cropImage(url, ratioText, fileName) {
-  const ratios={"1:1":1,"4:3":4/3,"16:9":16/9}; const ratio=ratios[ratioText];
-  if(!ratio)throw new Error("Use one of these crop ratios: 1:1, 4:3 or 16:9.");
-  const image=new window.Image(); image.crossOrigin="anonymous";
-  await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(new Error("The image could not be loaded for cropping."));image.src=url;});
-  let width=image.naturalWidth;let height=Math.round(width/ratio);if(height>image.naturalHeight){height=image.naturalHeight;width=Math.round(height*ratio);}
-  const sourceX=Math.round((image.naturalWidth-width)/2);const sourceY=Math.round((image.naturalHeight-height)/2);
-  const scale=Math.min(1,2400/Math.max(width,height));const canvas=document.createElement("canvas");canvas.width=Math.round(width*scale);canvas.height=Math.round(height*scale);
-  canvas.getContext("2d").drawImage(image,sourceX,sourceY,width,height,0,0,canvas.width,canvas.height);
-  const blob=await new Promise((resolve)=>canvas.toBlob(resolve,"image/webp",.84));if(!blob)throw new Error("Image crop failed.");
-  return new File([blob],`${fileName.replace(/\.[^.]+$/,"")}-${ratioText.replace(":","x")}.webp`,{type:"image/webp"});
 }

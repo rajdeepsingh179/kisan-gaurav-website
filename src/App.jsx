@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { Navigate, Route, Routes } from "react-router-dom";
 
+import AdminRoute from "./components/auth/AdminRoute";
 import RouteFallback from "./components/RouteFallback";
 import WebsiteLayout from "./layouts/WebsiteLayout";
 import loadMotionFeatures from "./utils/loadMotionFeatures";
@@ -36,12 +37,14 @@ export default function App() {
       <MotionConfig reducedMotion="user">
         <Suspense fallback={<RouteFallback />}>
           <Routes>
-            <Route path="admin" element={<Navigate replace to="/admin/dashboard" />} />
             <Route path="admin/login" element={<AdminLoginPage />} />
-            <Route path="admin/logout" element={<AdminLogoutPage />} />
-            <Route path="admin/change-password" element={<AdminPasswordPage />} />
-            <Route path="admin/dashboard" element={<AdminPage />} />
-            <Route path="admin/content" element={<AdminPage initialModule="content" />} />
+            <Route element={<AdminRoute />}>
+              <Route path="admin" element={<Navigate replace to="/admin/dashboard" />} />
+              <Route path="admin/logout" element={<AdminLogoutPage />} />
+              <Route path="admin/change-password" element={<AdminPasswordPage />} />
+              <Route path="admin/dashboard" element={<AdminPage />} />
+              <Route path="admin/content" element={<AdminPage initialModule="content" />} />
+            </Route>
             <Route element={<WebsiteLayout />}>
               <Route index element={<HomePage />} />
               <Route path="shop" element={<ShopPage />} />

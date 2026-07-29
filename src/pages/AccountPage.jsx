@@ -1,4 +1,4 @@
-import { Download, Heart, MapPin, Package, RotateCcw, User } from "lucide-react";
+import { Download, Heart, MapPin, Package, RotateCcw, ShieldCheck, Store, User } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import ProductCard from "../components/storefront/ProductCard";
@@ -8,6 +8,7 @@ import { useCatalog } from "../contexts/CatalogContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
 import { API_BASE_URL, apiFetch } from "../services/api";
 import { cancelOrder, getOrders, requestReturn } from "../services/orderService";
+import { isAdminRole } from "../utils/roles";
 
 const tabs = [["profile", User, "Profile"], ["orders", Package, "Orders"], ["addresses", MapPin, "Addresses"], ["wishlist", Heart, "Wishlist"]];
 
@@ -40,7 +41,7 @@ export default function AccountPage() {
   };
   return (
     <div className="account-page">
-      <aside aria-label="Account navigation"><p className="eyebrow">My account</p><h2>{profile?.name || user.name || "Kisan Gaurav customer"}</h2><span>{user.email}</span>{tabs.map(([tabId, Icon, label]) => <button type="button" aria-pressed={active === tabId} className={active === tabId ? "is-active" : ""} key={tabId} onClick={() => setActive(tabId)}><Icon size={16} aria-hidden="true" />{label}</button>)}<button type="button" onClick={signOutUser}>Logout</button></aside>
+      <aside aria-label="Account navigation"><p className="eyebrow">My account</p><h2>{profile?.name || user.name || "Kisan Gaurav customer"}</h2><span>{user.email}</span>{tabs.map(([tabId, Icon, label]) => <button type="button" aria-pressed={active === tabId} className={active === tabId ? "is-active" : ""} key={tabId} onClick={() => setActive(tabId)}><Icon size={16} aria-hidden="true" />{label}</button>)}{isAdminRole(user.role) ? <div className="account-context-switcher" aria-label="Application context"><div className="is-active"><Store size={16} aria-hidden="true" /><span>Customer Store</span><small>Active</small></div><Link to="/admin"><ShieldCheck size={16} aria-hidden="true" /><span>Admin Dashboard</span></Link></div> : null}<button type="button" onClick={signOutUser}>Logout</button></aside>
       <div className="account-page__content">
         {message ? <p className="account-message" role="status">{message}</p> : null}
         {active === "profile" && <section className="account-section"><h1>Profile</h1><div className="profile-card">{profile?.profile_photo_url ? <img src={profile.profile_photo_url} alt={`${profile?.name || user.name} profile`} /> : <User aria-hidden="true" />}<div><strong>{profile?.name || user.name}</strong><span>{user.email}</span><small>Auth.js account · {user.role}</small><label>Change profile photo<input type="file" accept="image/*" onChange={uploadPhoto} /></label></div></div><form className="address-form" onSubmit={async (event) => { event.preventDefault(); const data=Object.fromEntries(new FormData(event.currentTarget)); await apiFetch("/api/account/profile",{method:"PATCH",body:JSON.stringify(data)}); setProfile((current)=>({...current,...data})); }}><input aria-label="Name" autoComplete="name" name="name" defaultValue={profile?.name || ""} placeholder="Name" required /><input aria-label="Mobile number" autoComplete="tel" name="mobile" defaultValue={profile?.mobile || ""} placeholder="Mobile number" /><button type="submit">Save profile</button></form></section>}

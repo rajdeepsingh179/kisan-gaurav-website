@@ -16,19 +16,15 @@ while a customer without `ADMIN` or `SUPER_ADMIN` permission cannot use
 
 ## Initial Super Admin
 
-The first production migration creates this account idempotently:
+The production migrations reserve this account idempotently:
 
 - Email: `admin@kisangaurav.com`
-- Initial password: `ChangeMe@123`
 - Role: `SUPER_ADMIN`
 
-The password is not stored in plaintext. The migration contains a PBKDF2-SHA256
-hash using Cloudflare Workers' maximum 100,000 iterations and a separate salt. The account is marked as
-requiring a password change.
-
-Sign in at `/admin/login`, then use the security warning or open
-`/admin/change-password` immediately. Successful administrator login redirects
-to `/admin/dashboard`.
+There is no shared default password. Migration `0009_authentication_hardening.sql`
+disables the historical bootstrap credential when it has not already been
+changed. Provision an administrator explicitly or use the verified Google
+identity for the reserved email address.
 
 ## Create the first local administrator
 

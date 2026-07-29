@@ -2,6 +2,8 @@ name = "kisan-gaurav-api"
 main = "src/index.js"
 compatibility_date = "2026-07-26"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+preview_urls = false
 routes = [
   { pattern = "kisangaurav.com/api/*", zone_name = "kisangaurav.com" },
   { pattern = "www.kisangaurav.com/api/*", zone_name = "kisangaurav.com" }
