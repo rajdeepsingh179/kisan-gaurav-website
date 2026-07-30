@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 
 import ProductCard from "../components/storefront/ProductCard";
+import ProductPackaging from "../components/storefront/ProductPackaging";
 import { useCatalog } from "../contexts/CatalogContext";
 import { useCommerce } from "../contexts/CommerceContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
@@ -61,7 +62,7 @@ export default function ProductPage() {
       <section className="product-detail">
         <div className="product-detail__media">
           {item.badge ? <span className={`product-badge product-badge--${item.badge === "New" ? "new" : "best"}`}>{item.badge}</span> : null}
-          <img src={item.detailImage} width="1800" height="1800" alt={`${item.name} premium packaging and ingredients`} decoding="async" fetchPriority="high" />
+          <ProductPackaging item={item} variant={selectedVariant} priority size="detail" />
         </div>
         <div className="product-detail__copy">
           <p className="eyebrow">{categoryById[item.category].name}</p>

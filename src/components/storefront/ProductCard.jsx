@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { useCatalog } from "../../contexts/CatalogContext";
 import { useCommerce } from "../../contexts/CommerceContext";
+import ProductPackaging from "./ProductPackaging";
 
 export default function ProductCard({ item, priority = false }) {
   const { categoryById } = useCatalog();
@@ -13,15 +14,7 @@ export default function ProductCard({ item, priority = false }) {
       <div className="product-card__media-wrap">
         <Link className="product-card__media" to={`/shop/${item.slug}`} aria-label={`View ${item.name}`}>
         {item.badge ? <span className={`product-badge product-badge--${item.badge === "New" ? "new" : "best"}`}>{item.badge}</span> : null}
-          <img
-            alt={`${item.name} in Kisan Gaurav premium green and cream packaging`}
-            decoding="async"
-            fetchPriority={priority ? "high" : "auto"}
-            loading={priority ? "eager" : "lazy"}
-            src={item.image}
-            width="1200"
-            height="1200"
-          />
+          <ProductPackaging item={item} priority={priority} />
           <span className="product-card__view">
             View product <ArrowUpRight size={15} aria-hidden="true" />
           </span>
