@@ -35,7 +35,7 @@ export default function SignUpModal({ isOpen, onClose, onSwitchToSignIn }) {
     try { await signInGoogle(); onClose(); } catch (reason) { setError(reason.message); }
   };
   return (
-    <AuthModal description="Create an account for faster checkout, saved addresses and order history." isOpen={isOpen} onClose={onClose} title="Join Kisan Gaurav">
+    <AuthModal description="Create and verify your account to use cart, wishlist, checkout, saved addresses and order history." isOpen={isOpen} onClose={onClose} title="Join Kisan Gaurav">
       <div className="space-y-5">
         <GoogleButton label="Sign up with Google" onClick={google} />
         <FormDivider />

@@ -1,6 +1,7 @@
 import { Download, Heart, MapPin, Package, RotateCcw, ShieldCheck, Store, User } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { SignInModal, SignUpModal } from "../components/auth";
 import ProductCard from "../components/storefront/ProductCard";
 import { useAuth } from "../contexts/AuthContext";
 import { useCommerce } from "../contexts/CommerceContext";
@@ -17,6 +18,8 @@ export default function AccountPage() {
   const { user, signOutUser } = useAuth();
   const { wishlist } = useCommerce();
   const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const [authModal, setAuthModal] = useState(() => params.get("auth") === "signup" ? "signUp" : "signIn");
   const [active, setActive] = useState(params.get("tab") || "orders");
   const [orders, setOrders] = useState([]);
   const [addresses, setAddresses] = useState([]);
@@ -27,7 +30,12 @@ export default function AccountPage() {
     if (!user) return;
     Promise.all([getOrders(), apiFetch("/api/account/addresses"), apiFetch("/api/account/profile")]).then(([orderRows,addressRows,profileRow]) => { setOrders(orderRows); setAddresses(addressRows); setProfile(profileRow); }).catch((error) => setMessage(error.message));
   }, [user]);
-  if (!user) return <div className="commerce-empty"><User size={36} /><h2>Sign in to your account</h2><p>Access saved addresses, wishlist and order history.</p><Link className="button button--cream" to="/shop">Continue shopping</Link></div>;
+  useEffect(() => {
+    if (!user) return;
+    const returnTo = params.get("returnTo");
+    if (returnTo?.startsWith("/") && !returnTo.startsWith("//") && !returnTo.startsWith("/admin")) navigate(returnTo, { replace: true });
+  }, [navigate, params, user]);
+  if (!user) return <div className="commerce-empty"><User size={36} /><h2>Sign in or create an account</h2><p>Authentication is required for cart, wishlist, checkout, addresses and order history.</p><div><button className="button button--cream" type="button" onClick={() => setAuthModal("signIn")}>Sign in</button><button className="button" type="button" onClick={() => setAuthModal("signUp")}>Create account</button></div><Link to="/shop">Continue shopping</Link><SignInModal isOpen={authModal === "signIn"} onClose={() => setAuthModal(null)} onSwitchToSignUp={() => setAuthModal("signUp")} /><SignUpModal isOpen={authModal === "signUp"} onClose={() => setAuthModal(null)} onSwitchToSignIn={() => setAuthModal("signIn")} /></div>;
   const saveAddress = async (event) => {
     event.preventDefault();
     const form = Object.fromEntries(new FormData(event.currentTarget));

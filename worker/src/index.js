@@ -92,6 +92,14 @@ const requireUser = async (c) => {
   if (!session) throw new HTTPError(401, "Authentication required.");
   return session.user;
 };
+const requireVerifiedCustomer = async (c) => {
+  const sessionUser = await requireUser(c);
+  const customer = await c.env.DB.prepare(
+    "SELECT id,email,name,mobile FROM users WHERE id=?1 AND email_verified_at IS NOT NULL AND account_status='ACTIVE' AND blacklisted=0",
+  ).bind(sessionUser.id).first();
+  if (!customer) throw new HTTPError(403, "A valid verified customer account is required.", "verified_customer_required");
+  return customer;
+};
 const body = async (c) => {
   if (!/^application\/(?:[\w.-]+\+)?json(?:;|$)/i.test(c.req.header("Content-Type") || "")) {
     throw new HTTPError(415, "Content-Type must be application/json.", "unsupported_content_type");
@@ -305,56 +313,43 @@ app.put("/api/customer-state/:key", async (c) => {
   return c.json({ ok: true });
 });
 
-const assertCustomerCanPurchase = async (c, payload, session = null) => {
-  const email = String(payload?.customer?.email || "").trim().toLowerCase();
-  const userId = session?.user?.id || null;
-  const customer = userId
-    ? await c.env.DB.prepare("SELECT account_status,blacklisted FROM users WHERE id=?1").bind(userId).first()
-    : email
-      ? await c.env.DB.prepare("SELECT account_status,blacklisted FROM users WHERE email=?1").bind(email).first()
-      : null;
-  if (customer && (customer.account_status !== "ACTIVE" || customer.blacklisted)) {
-    throw new HTTPError(403, "This account is restricted. Please contact Kisan Gaurav support.", "account_restricted");
-  }
-};
 app.post("/api/checkout/quote", async (c) => {
+  await requireVerifiedCustomer(c);
   const data = await body(c);
-  await assertCustomerCanPurchase(c, data, await sessionFor(c));
   return c.json(await calculateCheckout(c.env, data));
 });
 app.post("/api/orders", async (c) => {
-  const data = validateOrderRequest(await body(c)); const session = await sessionFor(c);
-  await assertCustomerCanPurchase(c, data, session);
-  const checkout = await calculateCheckout(c.env, data);
-  if (data.paymentMethod !== "cod") throw new HTTPError(400, "Use the payment order endpoint for online payments.");
-  const order = await persistOrder(c.env, data, checkout, session?.user?.id, { method: "cod", status: "pending" });
-  return c.json(order, 201);
+  await requireVerifiedCustomer(c);
+  throw new HTTPError(405, "Orders require a completed online payment through Razorpay.", "online_payment_required");
 });
 app.post("/api/payments/razorpay/order", async (c) => {
-  const data = validateOrderRequest(await body(c)); const session = await sessionFor(c);
-  await assertCustomerCanPurchase(c, data, session);
+  const customer = await requireVerifiedCustomer(c);
+  const data = validateOrderRequest(await body(c));
+  if (data.paymentMethod !== "razorpay") throw new HTTPError(400, "Only online Razorpay payments are supported.", "online_payment_required");
+  if (data.customer.email !== customer.email.toLowerCase()) throw new HTTPError(403, "Checkout identity does not match the signed-in customer.", "customer_identity_mismatch");
   const checkout = await calculateCheckout(c.env, data);
   const response = await fetch("https://api.razorpay.com/v1/orders", { method: "POST", headers: { Authorization: `Basic ${btoa(`${c.env.RAZORPAY_KEY_ID}:${c.env.RAZORPAY_KEY_SECRET}`)}`, "Content-Type": "application/json" }, body: json({ amount: checkout.totalPaise, currency: "INR", receipt: `kg_${Date.now()}` }) });
   if (!response.ok) throw new HTTPError(502, "Unable to create payment order.");
   const razorpay = await response.json();
-  await c.env.DB.prepare("INSERT INTO settings(key,value_json) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=CURRENT_TIMESTAMP").bind(`payment_intent:${razorpay.id}`, json({ payload: data, checkout, userId: session?.user?.id || null, expiresAt: Date.now() + 900000 })).run();
+  await c.env.DB.prepare("INSERT INTO settings(key,value_json) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=CURRENT_TIMESTAMP").bind(`payment_intent:${razorpay.id}`, json({ payload: { ...data, customer: { ...data.customer, name: customer.name, email: customer.email } }, checkout, userId: customer.id, expiresAt: Date.now() + 900000 })).run();
   return c.json({ id: razorpay.id, amount: razorpay.amount, currency: razorpay.currency, keyId: c.env.RAZORPAY_KEY_ID });
 });
 app.post("/api/payments/razorpay/verify", async (c) => {
+  const customer = await requireVerifiedCustomer(c);
   const data = await body(c);
   if (![data.razorpay_order_id,data.razorpay_payment_id,data.razorpay_signature].every((value) => typeof value === "string" && value.length >= 8 && value.length <= 200)) {
     throw new HTTPError(400, "Payment verification payload is invalid.", "invalid_payment_payload");
   }
   const expected = await hmac(c.env.RAZORPAY_KEY_SECRET, `${data.razorpay_order_id}|${data.razorpay_payment_id}`);
   if (!safeEqual(expected, data.razorpay_signature || "")) throw new HTTPError(403, "Payment verification failed.");
-  const completed = await c.env.DB.prepare("SELECT o.id,o.order_number,o.status,o.total_paise FROM processed_payments p JOIN orders o ON o.id=p.order_id WHERE p.payment_order_id=?1 AND p.payment_id=?2").bind(data.razorpay_order_id,data.razorpay_payment_id).first();
+  const completed = await c.env.DB.prepare("SELECT o.id,o.order_number,o.status,o.total_paise FROM processed_payments p JOIN orders o ON o.id=p.order_id WHERE p.payment_order_id=?1 AND p.payment_id=?2 AND o.user_id=?3").bind(data.razorpay_order_id,data.razorpay_payment_id,customer.id).first();
   if (completed) return c.json({ id: completed.id, orderNumber: completed.order_number, status: completed.status, totalPaise: completed.total_paise, idempotent: true });
   const intent = await c.env.DB.prepare("SELECT value_json FROM settings WHERE key=?1").bind(`payment_intent:${data.razorpay_order_id}`).first();
   if (!intent) throw new HTTPError(404, "Payment intent not found.");
   const stored = JSON.parse(intent.value_json);
   if (stored.expiresAt < Date.now()) throw new HTTPError(400, "Payment intent expired.");
-  await assertCustomerCanPurchase(c, stored.payload, stored.userId ? { user: { id: stored.userId } } : null);
-  const order = await persistOrder(c.env, stored.payload, stored.checkout, stored.userId, { method: "razorpay", status: "paid", orderId: data.razorpay_order_id, paymentId: data.razorpay_payment_id, intentKey: `payment_intent:${data.razorpay_order_id}` });
+  if (!stored.userId || stored.userId !== customer.id) throw new HTTPError(403, "Payment intent belongs to another customer.", "payment_customer_mismatch");
+  const order = await persistOrder(c.env, stored.payload, stored.checkout, customer.id, { method: "razorpay", status: "paid", orderId: data.razorpay_order_id, paymentId: data.razorpay_payment_id, intentKey: `payment_intent:${data.razorpay_order_id}` });
   return c.json(order);
 });
 
@@ -451,11 +446,15 @@ const cmsUser = async (c) => {
   if (!assigned || !ADMIN_ROLES.has(assigned.role)) throw new HTTPError(403, "You do not have administrator permissions.");
   return { ...user, role: assigned.role };
 };
-export const canAccess = (role, path) => {
+export const canAccess = (role, path, method = "GET") => {
   if (!ADMIN_ROLES.has(role)) return false;
   if (role === "SUPER_ADMIN") return true;
   if (path.includes("/permissions")) return false;
-  if (/^\/api\/admin\/customers\/[^/]+(?:\/|$)/.test(path)) return false;
+  if (/^\/api\/admin\/customers\/[^/]+\/status$/.test(path)) return false;
+  if (/^\/api\/admin\/customers\/[^/]+$/.test(path)) return ["GET","PATCH"].includes(method);
+  if (/^\/api\/admin\/customers\/[^/]+\/orders$/.test(path)) return method === "GET";
+  if (/^\/api\/admin\/customers\/[^/]+\/(?:password-reset|resend-verification)$/.test(path)) return method === "POST";
+  if (/^\/api\/admin\/customers\/[^/]+\//.test(path)) return false;
   return true;
 };
 const auditStatement = (c, action, resourceType, resourceId, details = {}) => {
@@ -486,6 +485,9 @@ const activeSuperAdminCount = async (c) => {
 const assertCustomerTargetSafe = async (c, target, restricting = false) => {
   if (!target) throw new HTTPError(404, "Customer not found.", "customer_not_found");
   const admin = c.get("admin");
+  if (admin.role === "ADMIN" && ADMIN_ROLES.has(target.effective_role)) {
+    throw new HTTPError(403, "Administrators cannot manage another administrator through customer actions.", "authorization_denied");
+  }
   if (target.id === admin.id && restricting) {
     throw new HTTPError(409, "You cannot restrict or delete your own signed-in account.", "self_account_protected");
   }
@@ -578,19 +580,19 @@ app.patch("/api/admin/account/password", async (c) => {
 });
 app.get("/api/admin/dashboard", async (c) => {
   const [revenue, orders, pending, products, categories, customers, inventory, lowStock, today, recent, monthly, topProducts, topCategories] = await c.env.DB.batch([
-    c.env.DB.prepare("SELECT COALESCE(SUM(total_paise),0) value FROM orders WHERE payment_status='paid' OR payment_method='cod'"),
-    c.env.DB.prepare("SELECT COUNT(*) value FROM orders"),
-    c.env.DB.prepare("SELECT COUNT(*) value FROM orders WHERE status IN ('pending','confirmed')"),
+    c.env.DB.prepare("SELECT COALESCE(SUM(o.total_paise),0) value FROM orders o JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL WHERE o.payment_status='paid' AND o.payment_method='razorpay'"),
+    c.env.DB.prepare("SELECT COUNT(*) value FROM orders o JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL"),
+    c.env.DB.prepare("SELECT COUNT(*) value FROM orders o JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL WHERE o.status IN ('pending','confirmed')"),
     c.env.DB.prepare("SELECT COUNT(*) value FROM products WHERE archived=0"),
     c.env.DB.prepare("SELECT COUNT(*) value FROM categories WHERE active=1"),
     c.env.DB.prepare("SELECT COUNT(*) value FROM users WHERE role='customer'"),
     c.env.DB.prepare("SELECT COALESCE(SUM(stock),0) value FROM product_variants WHERE active=1 AND archived=0"),
     c.env.DB.prepare("SELECT COUNT(*) value FROM product_variants WHERE archived=0 AND stock<=low_stock_threshold"),
-    c.env.DB.prepare("SELECT COUNT(*) value FROM orders WHERE date(created_at)=date('now')"),
-    c.env.DB.prepare("SELECT id,order_number,customer_name,status,total_paise,created_at FROM orders ORDER BY created_at DESC LIMIT 6"),
-    c.env.DB.prepare("SELECT strftime('%Y-%m',created_at) month,COUNT(*) orders,COALESCE(SUM(total_paise),0) revenue_paise FROM orders GROUP BY month ORDER BY month DESC LIMIT 12"),
-    c.env.DB.prepare("SELECT oi.product_name,SUM(oi.quantity) units FROM order_items oi GROUP BY oi.product_id ORDER BY units DESC LIMIT 5"),
-    c.env.DB.prepare("SELECT c.name,SUM(oi.quantity) units FROM order_items oi JOIN products p ON p.id=oi.product_id JOIN categories c ON c.id=p.category_id GROUP BY c.id ORDER BY units DESC LIMIT 5"),
+    c.env.DB.prepare("SELECT COUNT(*) value FROM orders o JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL WHERE date(o.created_at)=date('now')"),
+    c.env.DB.prepare("SELECT o.id,o.order_number,o.user_id,o.customer_name,o.status,o.total_paise,o.created_at FROM orders o JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL ORDER BY o.created_at DESC LIMIT 6"),
+    c.env.DB.prepare("SELECT strftime('%Y-%m',o.created_at) month,COUNT(*) orders,COALESCE(SUM(o.total_paise),0) revenue_paise FROM orders o JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL GROUP BY month ORDER BY month DESC LIMIT 12"),
+    c.env.DB.prepare("SELECT oi.product_name,SUM(oi.quantity) units FROM order_items oi JOIN orders o ON o.id=oi.order_id JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL GROUP BY oi.product_id ORDER BY units DESC LIMIT 5"),
+    c.env.DB.prepare("SELECT c.name,SUM(oi.quantity) units FROM order_items oi JOIN orders o ON o.id=oi.order_id JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL JOIN products p ON p.id=oi.product_id JOIN categories c ON c.id=p.category_id GROUP BY c.id ORDER BY units DESC LIMIT 5"),
   ]);
   return c.json({
     revenuePaise: revenue.results[0].value, orders: orders.results[0].value, pendingOrders: pending.results[0].value,
@@ -601,10 +603,10 @@ app.get("/api/admin/dashboard", async (c) => {
 });
 app.get("/api/admin/analytics/overview", async (c) => {
   const [monthly, products, categories, sessions] = await c.env.DB.batch([
-    c.env.DB.prepare("SELECT strftime('%Y-%m',created_at) month,COUNT(*) orders,SUM(total_paise) revenue_paise FROM orders GROUP BY month ORDER BY month DESC LIMIT 24"),
-    c.env.DB.prepare("SELECT oi.product_name,SUM(oi.quantity) units,SUM(oi.unit_price_paise*oi.quantity) revenue_paise FROM order_items oi GROUP BY oi.product_id ORDER BY units DESC LIMIT 10"),
-    c.env.DB.prepare("SELECT p.category_id,c.name,SUM(oi.quantity) units FROM order_items oi JOIN products p ON p.id=oi.product_id JOIN categories c ON c.id=p.category_id GROUP BY p.category_id ORDER BY units DESC LIMIT 10"),
-    c.env.DB.prepare("SELECT COUNT(DISTINCT session_id) sessions,(SELECT COUNT(*) FROM orders) orders FROM analytics_events"),
+    c.env.DB.prepare("SELECT strftime('%Y-%m',o.created_at) month,COUNT(*) orders,SUM(o.total_paise) revenue_paise FROM orders o JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL GROUP BY month ORDER BY month DESC LIMIT 24"),
+    c.env.DB.prepare("SELECT oi.product_name,SUM(oi.quantity) units,SUM(oi.unit_price_paise*oi.quantity) revenue_paise FROM order_items oi JOIN orders o ON o.id=oi.order_id JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL GROUP BY oi.product_id ORDER BY units DESC LIMIT 10"),
+    c.env.DB.prepare("SELECT p.category_id,c.name,SUM(oi.quantity) units FROM order_items oi JOIN orders o ON o.id=oi.order_id JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL JOIN products p ON p.id=oi.product_id JOIN categories c ON c.id=p.category_id GROUP BY p.category_id ORDER BY units DESC LIMIT 10"),
+    c.env.DB.prepare("SELECT COUNT(DISTINCT session_id) sessions,(SELECT COUNT(*) FROM orders o JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL) orders FROM analytics_events"),
   ]);
   const sessionRow = sessions.results[0] || { sessions: 0, orders: 0 };
   return c.json({ monthly: monthly.results, bestSellingProducts: products.results, topCategories: categories.results, conversionRate: sessionRow.sessions ? sessionRow.orders / sessionRow.sessions * 100 : 0 });
@@ -667,25 +669,31 @@ app.patch("/api/admin/media/:id", async (c) => {
 app.get("/api/admin/customers/:id", async (c) => {
   const target = await customerRecord(c, c.req.param("id"));
   await assertCustomerTargetSafe(c, target);
-  const [addresses, accounts, summary] = await c.env.DB.batch([
+  const [addresses, accounts, summary, lastLogin] = await c.env.DB.batch([
     c.env.DB.prepare("SELECT * FROM addresses WHERE user_id=?1 ORDER BY is_default DESC,created_at DESC").bind(target.id),
     c.env.DB.prepare("SELECT provider,created_at FROM auth_accounts WHERE user_id=?1 ORDER BY created_at").bind(target.id),
     c.env.DB.prepare("SELECT COUNT(*) orders_count,COALESCE(SUM(total_paise),0) lifetime_value_paise,MAX(created_at) last_order_at FROM orders WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("SELECT MAX(created_at) last_login_at FROM activity_logs WHERE actor_user_id=?1 AND action='login_succeeded'").bind(target.id),
   ]);
+  await audit(c, "customer_profile_viewed", "customer", target.id, customerAuditDetails(c, target));
   return c.json({
     customer: target,
     addresses: addresses.results,
     providers: accounts.results,
     orderSummary: summary.results[0] || {},
+    lastLoginAt: lastLogin.results[0]?.last_login_at || null,
+    sessions: { mode: "stateless_jwt", individuallyTrackable: false, sessionVersion: Number(target.session_version || 0) },
   });
 });
 
 app.get("/api/admin/customers/:id/orders", async (c) => {
   const target = await customerRecord(c, c.req.param("id"));
   await assertCustomerTargetSafe(c, target);
-  return c.json((await c.env.DB.prepare(
+  const orders = (await c.env.DB.prepare(
     "SELECT id,order_number,status,payment_status,total_paise,created_at FROM orders WHERE user_id=?1 ORDER BY created_at DESC LIMIT 250",
-  ).bind(target.id).all()).results);
+  ).bind(target.id).all()).results;
+  await audit(c, "customer_orders_viewed", "customer", target.id, customerAuditDetails(c, target, { orderCount: orders.length }));
+  return c.json(orders);
 });
 
 app.patch("/api/admin/customers/:id", async (c) => {
@@ -696,16 +704,59 @@ app.patch("/api/admin/customers/:id", async (c) => {
   const lastName = String(data.lastName ?? target.last_name ?? "").trim();
   const name = String(data.name || `${firstName} ${lastName}`.trim()).trim();
   const mobile = String(data.mobile || "").trim();
+  const notes = String(data.notes ?? target.customer_notes ?? "").trim();
+  const requestedStatus = data.status ? String(data.status).toUpperCase() : target.account_status;
   if (!name || name.length > 160 || firstName.length > 80 || lastName.length > 80 || hasControlCharacter(name)) {
     throw new HTTPError(400, "Customer name is invalid.", "invalid_customer");
   }
   if (mobile && !/^[+0-9 ()-]{7,24}$/.test(mobile)) throw new HTTPError(400, "Mobile number is invalid.", "invalid_customer");
-  await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE users SET name=?1,first_name=?2,last_name=?3,mobile=?4,updated_at=CURRENT_TIMESTAMP WHERE id=?5")
-      .bind(name, firstName || null, lastName || null, mobile || null, target.id),
-    auditStatement(c, "customer_updated", "customer", target.id, customerAuditDetails(c, target, { fields: ["name","firstName","lastName","mobile"] })),
-  ]);
+  const notesContainUnsafeControl = [...notes].some((character) => {
+    const code = character.charCodeAt(0);
+    return (code < 32 && ![9, 10, 13].includes(code)) || code === 127;
+  });
+  if (notes.length > 4000 || notesContainUnsafeControl) {
+    throw new HTTPError(400, "Customer notes are invalid.", "invalid_customer");
+  }
+  if (!["ACTIVE","SUSPENDED","DELETED"].includes(requestedStatus)) throw new HTTPError(400, "Customer status is invalid.", "invalid_status_action");
+  const statusChanged = requestedStatus !== target.account_status;
+  if (statusChanged && c.get("admin").role !== "SUPER_ADMIN") {
+    throw new HTTPError(403, "Only a Super Admin can change customer status.", "authorization_denied");
+  }
+  if (statusChanged) await assertCustomerTargetSafe(c, target, requestedStatus !== "ACTIVE");
+  const statusAssignment = {
+    ACTIVE: "account_status='ACTIVE',suspended_at=NULL,deleted_at=NULL,failed_login_count=0,locked_until=NULL",
+    SUSPENDED: "account_status='SUSPENDED',suspended_at=CURRENT_TIMESTAMP,deleted_at=NULL",
+    DELETED: "account_status='DELETED',deleted_at=CURRENT_TIMESTAMP,suspended_at=NULL",
+  }[requestedStatus];
+  const statements = [
+    c.env.DB.prepare("UPDATE users SET name=?1,first_name=?2,last_name=?3,mobile=?4,customer_notes=?5,updated_at=CURRENT_TIMESTAMP WHERE id=?6")
+      .bind(name, firstName || null, lastName || null, mobile || null, notes || null, target.id),
+  ];
+  if (statusChanged) {
+    statements.push(
+      c.env.DB.prepare(`UPDATE users SET ${statusAssignment},status_changed_at=CURRENT_TIMESTAMP,status_changed_by=?1,session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?2`).bind(c.get("admin").id,target.id),
+      ...(requestedStatus !== "ACTIVE" ? [
+        c.env.DB.prepare("DELETE FROM password_reset_tokens WHERE user_id=?1").bind(target.id),
+        c.env.DB.prepare("DELETE FROM email_verification_tokens WHERE user_id=?1").bind(target.id),
+      ] : []),
+    );
+  }
+  statements.push(auditStatement(c, "customer_updated", "customer", target.id, customerAuditDetails(c, target, { fields: ["name","firstName","lastName","mobile","notes",...(statusChanged?["status"]:[])], previousStatus: target.account_status, newStatus: requestedStatus, sessionsRevoked: statusChanged })));
+  await c.env.DB.batch(statements);
   return c.json({ ok: true });
+});
+
+app.get("/api/admin/orders/:id", async (c) => {
+  const order = await c.env.DB.prepare(
+    "SELECT o.* FROM orders o JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL WHERE o.id=?1",
+  ).bind(c.req.param("id")).first();
+  if (!order) throw new HTTPError(404, "Order not found.", "order_not_found");
+  const [items, history] = await c.env.DB.batch([
+    c.env.DB.prepare("SELECT product_name,variant_name,sku,unit_price_paise,quantity FROM order_items WHERE order_id=?1").bind(order.id),
+    c.env.DB.prepare("SELECT status,note,created_at FROM order_status_history WHERE order_id=?1 ORDER BY created_at").bind(order.id),
+  ]);
+  await audit(c, "order_viewed", "order", order.id, { customerId: order.user_id, customerEmail: order.customer_email, adminEmail: c.get("admin").email });
+  return c.json({ order, items: items.results, history: history.results });
 });
 
 app.post("/api/admin/customers/:id/password-reset", async (c) => {
@@ -783,9 +834,12 @@ app.delete("/api/admin/customers/:id", async (c) => {
   const data = await body(c);
   if (data.confirmation !== "DELETE") throw new HTTPError(400, "Type DELETE to confirm permanent deletion.", "confirmation_required");
   await assertCustomerTargetSafe(c, target, true);
-  const anonymizedEmail = `deleted+${target.id}@invalid.local`;
+  const linkedOrders = await c.env.DB.prepare("SELECT COUNT(*) count FROM orders WHERE user_id=?1").bind(target.id).first();
   const statements = [
-    auditStatement(c, "customer_permanently_deleted", "customer", target.id, customerAuditDetails(c, target, { irreversible: true })),
+    auditStatement(c, "customer_permanently_deleted", "customer", target.id, customerAuditDetails(c, target, {
+      irreversible: true,
+      deletedOrderCount: Number(linkedOrders?.count || 0),
+    })),
   ];
   if (target.profile_photo_url) {
     try {
@@ -799,9 +853,15 @@ app.delete("/api/admin/customers/:id", async (c) => {
   }
   statements.push(
     c.env.DB.prepare("INSERT INTO media_deletion_queue(asset_id,object_key) SELECT 'customer-invoice:'||id,invoice_key FROM orders WHERE user_id=?1 AND invoice_key IS NOT NULL").bind(target.id),
+    c.env.DB.prepare("DELETE FROM processed_payments WHERE order_id IN (SELECT id FROM orders WHERE user_id=?1)").bind(target.id),
     c.env.DB.prepare("DELETE FROM returns WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM coupon_redemptions WHERE order_id IN (SELECT id FROM orders WHERE user_id=?1)").bind(target.id),
+    c.env.DB.prepare("DELETE FROM notifications WHERE user_id=?1 OR order_id IN (SELECT id FROM orders WHERE user_id=?1)").bind(target.id),
+    c.env.DB.prepare("DELETE FROM order_transitions WHERE order_id IN (SELECT id FROM orders WHERE user_id=?1)").bind(target.id),
+    c.env.DB.prepare("DELETE FROM order_status_history WHERE order_id IN (SELECT id FROM orders WHERE user_id=?1)").bind(target.id),
+    c.env.DB.prepare("DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE user_id=?1)").bind(target.id),
+    c.env.DB.prepare("DELETE FROM orders WHERE user_id=?1").bind(target.id),
     c.env.DB.prepare("DELETE FROM reviews WHERE user_id=?1").bind(target.id),
-    c.env.DB.prepare("DELETE FROM notifications WHERE user_id=?1").bind(target.id),
     c.env.DB.prepare("DELETE FROM analytics_events WHERE user_id=?1").bind(target.id),
     c.env.DB.prepare("DELETE FROM customer_state WHERE user_id=?1").bind(target.id),
     c.env.DB.prepare("DELETE FROM addresses WHERE user_id=?1").bind(target.id),
@@ -822,7 +882,6 @@ app.delete("/api/admin/customers/:id", async (c) => {
     c.env.DB.prepare("UPDATE email_templates SET updated_by=NULL WHERE updated_by=?1").bind(target.id),
     c.env.DB.prepare("UPDATE media_assets SET created_by=NULL WHERE created_by=?1").bind(target.id),
     c.env.DB.prepare("UPDATE activity_logs SET actor_user_id=NULL WHERE actor_user_id=?1").bind(target.id),
-    c.env.DB.prepare("UPDATE orders SET user_id=NULL,customer_name='Deleted customer',customer_email=?1,customer_mobile='deleted',shipping_address_json='{}',invoice_key=NULL,updated_at=CURRENT_TIMESTAMP WHERE user_id=?2").bind(anonymizedEmail,target.id),
     c.env.DB.prepare("DELETE FROM user_permissions WHERE user_id=?1").bind(target.id),
     c.env.DB.prepare("DELETE FROM users WHERE id=?1").bind(target.id),
   );
@@ -835,15 +894,15 @@ app.get("/api/admin/:resource", async (c) => {
   const queries = {
     products: "SELECT p.*,c.name category_name,(SELECT COUNT(*) FROM product_variants v WHERE v.product_id=p.id AND v.archived=0) variant_count,(SELECT COALESCE(SUM(stock),0) FROM product_variants v WHERE v.product_id=p.id AND v.archived=0) stock FROM products p JOIN categories c ON c.id=p.category_id ORDER BY p.archived,p.updated_at DESC",
     categories: "SELECT * FROM categories ORDER BY sort_order,name",
-    orders: "SELECT * FROM orders ORDER BY created_at DESC LIMIT 250",
-    customers: "SELECT u.id,u.email,u.name,u.first_name,u.last_name,u.mobile,u.email_verified_at,u.account_status,u.blacklisted,CASE WHEN u.blacklisted=1 THEN 'BLACKLISTED' ELSE u.account_status END status,COALESCE(up.role,u.role) role,u.created_at,(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) orders_count,(SELECT COALESCE(SUM(total_paise),0) FROM orders o WHERE o.user_id=u.id) lifetime_value_paise FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id ORDER BY u.created_at DESC LIMIT 500",
+    orders: "SELECT o.* FROM orders o JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL ORDER BY o.created_at DESC LIMIT 250",
+    customers: "SELECT u.id,u.email,u.name,u.first_name,u.last_name,u.mobile,u.customer_notes,u.email_verified_at,u.account_status,u.blacklisted,CASE WHEN u.blacklisted=1 THEN 'BLACKLISTED' ELSE u.account_status END status,COALESCE(up.role,u.role) role,u.created_at,(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) orders_count,(SELECT COALESCE(SUM(total_paise),0) FROM orders o WHERE o.user_id=u.id) lifetime_value_paise FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id WHERE UPPER(COALESCE(up.role,u.role)) NOT IN ('ADMIN','SUPER_ADMIN') ORDER BY u.created_at DESC LIMIT 500",
     users: "SELECT u.id,u.email,u.name,u.mobile,u.account_status,u.blacklisted,COALESCE(up.role,u.role) role,u.created_at,(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) orders_count,(SELECT COALESCE(SUM(total_paise),0) FROM orders o WHERE o.user_id=u.id) lifetime_value_paise FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id ORDER BY u.created_at DESC LIMIT 500",
     inventory: "SELECT v.*,p.name product_name FROM product_variants v JOIN products p ON p.id=v.product_id WHERE v.archived=0 AND p.archived=0 ORDER BY v.stock",
     coupons: "SELECT * FROM coupons ORDER BY created_at DESC",
     reviews: "SELECT r.*,p.name product_name,u.name customer_name FROM reviews r JOIN products p ON p.id=r.product_id JOIN users u ON u.id=r.user_id ORDER BY r.created_at DESC",
     banners: "SELECT * FROM banners ORDER BY sort_order,created_at DESC",
     settings: "SELECT * FROM settings WHERE key NOT LIKE 'payment_intent:%' ORDER BY key",
-    analytics: "SELECT strftime('%Y-%m',created_at) month,COUNT(*) orders,SUM(total_paise) revenue_paise FROM orders GROUP BY month ORDER BY month DESC LIMIT 24",
+    analytics: "SELECT strftime('%Y-%m',o.created_at) month,COUNT(*) orders,SUM(o.total_paise) revenue_paise FROM orders o JOIN users u ON u.id=o.user_id AND u.email_verified_at IS NOT NULL GROUP BY month ORDER BY month DESC LIMIT 24",
     media: "SELECT m.*,u.name created_by_name FROM media_assets m LEFT JOIN users u ON u.id=m.created_by ORDER BY m.created_at DESC LIMIT 500",
     homepage: "SELECT * FROM homepage_sections ORDER BY sort_order",
     digital: "SELECT * FROM digital_content ORDER BY updated_at DESC",

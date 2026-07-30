@@ -40,26 +40,37 @@ export async function calculateCheckout(env, payload) {
 }
 
 export async function persistOrder(env, payload, checkout, userId, payment) {
+  if (!userId || payment?.method !== "razorpay" || payment?.status !== "paid" || !payment?.orderId || !payment?.paymentId) {
+    throw new HTTPError(403, "A verified customer and completed online payment are required.", "online_payment_required");
+  }
+  const customer = await env.DB.prepare(
+    "SELECT id,email,name FROM users WHERE id=?1 AND email_verified_at IS NOT NULL AND account_status='ACTIVE' AND blacklisted=0",
+  ).bind(userId).first();
+  if (!customer) throw new HTTPError(403, "A valid verified customer account is required.", "verified_customer_required");
+  if (String(payload?.customer?.email || "").trim().toLowerCase() !== customer.email.toLowerCase()) {
+    throw new HTTPError(403, "Checkout identity does not match the signed-in customer.", "customer_identity_mismatch");
+  }
+  const customerPayload = { ...payload.customer, name: customer.name, email: customer.email };
   const orderId = id();
   const orderNumber = `KG${Date.now().toString(36).toUpperCase()}${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
   const address = payload.address || {};
   const invoiceKey = `invoices/${orderId}.json`;
-  const invoice = json({ orderId, orderNumber, customer: payload.customer, address, items: checkout.items, totals: checkout, issuedAt: new Date().toISOString() });
+  const invoice = json({ orderId, orderNumber, customer: customerPayload, address, items: checkout.items, totals: checkout, issuedAt: new Date().toISOString() });
   const statements = [
-    env.DB.prepare("INSERT INTO orders(id,order_number,user_id,customer_name,customer_email,customer_mobile,shipping_address_json,shipping_method,coupon_code,subtotal_paise,discount_paise,shipping_paise,tax_paise,total_paise,payment_method,payment_status,payment_order_id,payment_id,status,invoice_key) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,'confirmed',?19)").bind(orderId, orderNumber, userId || null, payload.customer.name, payload.customer.email.toLowerCase(), payload.customer.phone, json(address), checkout.shippingMethod, checkout.coupon?.code || null, checkout.subtotalPaise, checkout.discountPaise, checkout.shippingPaise, checkout.taxPaise, checkout.totalPaise, payment.method, payment.status, payment.orderId || null, payment.paymentId || null, invoiceKey),
+    env.DB.prepare("INSERT INTO orders(id,order_number,user_id,customer_name,customer_email,customer_mobile,shipping_address_json,shipping_method,coupon_code,subtotal_paise,discount_paise,shipping_paise,tax_paise,total_paise,payment_method,payment_status,payment_order_id,payment_id,status,invoice_key) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,'confirmed',?19)").bind(orderId, orderNumber, userId, customer.name, customer.email.toLowerCase(), customerPayload.phone, json(address), checkout.shippingMethod, checkout.coupon?.code || null, checkout.subtotalPaise, checkout.discountPaise, checkout.shippingPaise, checkout.taxPaise, checkout.totalPaise, payment.method, payment.status, payment.orderId, payment.paymentId, invoiceKey),
     env.DB.prepare("INSERT INTO order_status_history(id,order_id,status,note) VALUES(?1,?2,'confirmed','Order confirmed')").bind(id(), orderId),
-    env.DB.prepare("INSERT INTO notifications(id,user_id,order_id,channel,event_type,recipient,payload_json) VALUES(?1,?2,?3,'email','order_confirmation',?4,?5)").bind(id(), userId || null, orderId, payload.customer.email, json({ orderNumber, totalPaise: checkout.totalPaise })),
+    env.DB.prepare("INSERT INTO notifications(id,user_id,order_id,channel,event_type,recipient,payload_json) VALUES(?1,?2,?3,'email','order_confirmation',?4,?5)").bind(id(), userId, orderId, customer.email, json({ orderNumber, totalPaise: checkout.totalPaise })),
     env.DB.prepare("INSERT INTO notifications(id,user_id,order_id,channel,event_type,recipient,payload_json) VALUES(?1,NULL,?2,'admin','new_order','admin',?3)").bind(id(), orderId, json({ orderNumber })),
   ];
   for (const item of checkout.items) {
     statements.push(env.DB.prepare("INSERT INTO order_items(id,order_id,product_id,variant_id,product_name,variant_name,sku,unit_price_paise,quantity) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)").bind(id(), orderId, item.productId, item.variantId, item.name, item.variant, item.sku, item.pricePaise, item.quantity));
-    statements.push(env.DB.prepare("INSERT INTO inventory_mutations(id,variant_id,mutation_type,quantity,reason,reference_id,actor_user_id) VALUES(?1,?2,'delta',?3,'order',?4,?5)").bind(id(),item.variantId,-item.quantity,orderId,userId || null));
+    statements.push(env.DB.prepare("INSERT INTO inventory_mutations(id,variant_id,mutation_type,quantity,reason,reference_id,actor_user_id) VALUES(?1,?2,'delta',?3,'order',?4,?5)").bind(id(),item.variantId,-item.quantity,orderId,userId));
   }
   if (checkout.coupon) {
-    statements.push(env.DB.prepare("INSERT INTO coupon_redemptions(coupon_id,order_id,user_id) VALUES(?1,?2,?3)").bind(checkout.coupon.id, orderId, userId || null));
+    statements.push(env.DB.prepare("INSERT INTO coupon_redemptions(coupon_id,order_id,user_id) VALUES(?1,?2,?3)").bind(checkout.coupon.id, orderId, userId));
   }
-  if (userId && payload.saveAddress) {
-    statements.push(env.DB.prepare("INSERT INTO addresses(id,user_id,label,recipient_name,mobile,line1,line2,city,state,pincode) VALUES(?1,?2,'Order address',?3,?4,?5,?6,?7,?8,?9)").bind(id(),userId,payload.customer.name,payload.customer.phone,address.line1,address.line2 || null,address.city,address.state,address.pincode));
+  if (payload.saveAddress) {
+    statements.push(env.DB.prepare("INSERT INTO addresses(id,user_id,label,recipient_name,mobile,line1,line2,city,state,pincode) VALUES(?1,?2,'Order address',?3,?4,?5,?6,?7,?8,?9)").bind(id(),userId,customer.name,customerPayload.phone,address.line1,address.line2 || null,address.city,address.state,address.pincode));
   }
   if (payment.orderId && payment.paymentId) {
     statements.push(env.DB.prepare("INSERT INTO processed_payments(payment_order_id,payment_id,order_id) VALUES(?1,?2,?3)").bind(payment.orderId,payment.paymentId,orderId));

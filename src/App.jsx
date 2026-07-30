@@ -3,6 +3,7 @@ import { LazyMotion, MotionConfig } from "framer-motion";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import AdminRoute from "./components/auth/AdminRoute";
+import CustomerRoute from "./components/auth/CustomerRoute";
 import RouteFallback from "./components/RouteFallback";
 import WebsiteLayout from "./layouts/WebsiteLayout";
 import loadMotionFeatures from "./utils/loadMotionFeatures";
@@ -60,10 +61,12 @@ export default function App() {
               <Route path="policies/:slug" element={<LegalPage />} />
               <Route path="blog" element={<BlogPage />} />
               <Route path="blog/:slug" element={<BlogArticlePage />} />
-              <Route path="cart" element={<CartPage />} />
-              <Route path="checkout" element={<CheckoutPage />} />
               <Route path="account" element={<AccountPage />} />
-              <Route path="order-success/:orderId" element={<OrderSuccessPage />} />
+              <Route element={<CustomerRoute />}>
+                <Route path="cart" element={<CartPage />} />
+                <Route path="checkout" element={<CheckoutPage />} />
+                <Route path="order-success/:orderId" element={<OrderSuccessPage />} />
+              </Route>
               <Route path="forgot-password" element={<PasswordResetPage />} />
               <Route path="reset-password" element={<PasswordResetPage />} />
               <Route path="verify-email" element={<EmailVerificationPage />} />

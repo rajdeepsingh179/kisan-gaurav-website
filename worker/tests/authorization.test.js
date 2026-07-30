@@ -17,10 +17,15 @@ test("ADMIN can operate standard modules but cannot manage permissions", () => {
     assert.equal(canAccess("ADMIN", `/api/admin/${module}`, "GET"), true, module);
   }
   assert.equal(canAccess("ADMIN", "/api/admin/permissions/user-1", "PUT"), false);
-  for (const method of ["GET", "POST", "PATCH", "PUT", "DELETE"]) {
-    assert.equal(canAccess("ADMIN", "/api/admin/customers/user-1", method), false);
-    assert.equal(canAccess("ADMIN", "/api/admin/customers/user-1/orders", method), false);
-  }
+  assert.equal(canAccess("ADMIN", "/api/admin/customers/user-1", "GET"), true);
+  assert.equal(canAccess("ADMIN", "/api/admin/customers/user-1", "PATCH"), true);
+  assert.equal(canAccess("ADMIN", "/api/admin/customers/user-1", "DELETE"), false);
+  assert.equal(canAccess("ADMIN", "/api/admin/customers/user-1/orders", "GET"), true);
+  assert.equal(canAccess("ADMIN", "/api/admin/customers/user-1/orders", "PATCH"), false);
+  assert.equal(canAccess("ADMIN", "/api/admin/customers/user-1/password-reset", "POST"), true);
+  assert.equal(canAccess("ADMIN", "/api/admin/customers/user-1/password-reset", "GET"), false);
+  assert.equal(canAccess("ADMIN", "/api/admin/customers/user-1/resend-verification", "POST"), true);
+  assert.equal(canAccess("ADMIN", "/api/admin/customers/user-1/status", "PATCH"), false);
 });
 
 test("SUPER_ADMIN can manage all Admin CMS routes", () => {

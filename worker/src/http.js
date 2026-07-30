@@ -15,6 +15,9 @@ const DATABASE_ERRORS = [
   ["INVALID_ORDER_TRANSITION", 409, "That order status transition is not allowed.", "invalid_order_transition"],
   ["COUPON_UNAVAILABLE", 409, "Coupon is invalid, exhausted, or expired.", "coupon_unavailable"],
   ["RETURN_ALREADY_EXISTS", 409, "An active return request already exists for this order.", "return_already_exists"],
+  ["ORDER_REQUIRES_VERIFIED_CUSTOMER", 403, "A valid verified customer account is required.", "verified_customer_required"],
+  ["ORDER_REQUIRES_VALID_CUSTOMER", 409, "Orders must remain linked to a valid customer.", "order_customer_required"],
+  ["ONLINE_PAYMENT_REQUIRED", 403, "A completed online payment is required.", "online_payment_required"],
 ];
 
 export function databaseHTTPError(error) {

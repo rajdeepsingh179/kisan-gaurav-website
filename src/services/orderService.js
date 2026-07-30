@@ -1,6 +1,7 @@
 import { apiFetch } from "./api";
 
 export const createOrder = (payload) => apiFetch("/api/orders", { method: "POST", body: JSON.stringify(payload) });
+export const getCheckoutQuote = (payload) => apiFetch("/api/checkout/quote", { method: "POST", body: JSON.stringify(payload) });
 export const createRazorpayPayment = (payload) => apiFetch("/api/payments/razorpay/order", { method: "POST", body: JSON.stringify(payload) });
 export const verifyRazorpayPayment = (payload) => apiFetch("/api/payments/razorpay/verify", { method: "POST", body: JSON.stringify(payload) });
 export const getOrders = () => apiFetch("/api/orders");
