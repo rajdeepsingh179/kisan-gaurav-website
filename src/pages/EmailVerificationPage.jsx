@@ -14,6 +14,7 @@ export default function EmailVerificationPage() {
   useEffect(() => {
     if (!token || started.current) return;
     started.current = true;
+    window.history.replaceState(window.history.state, "", window.location.pathname);
     verifyEmail(token)
       .then((result) => setState({ busy: false, message: result.message, error: false }))
       .catch((error) => setState({ busy: false, message: error.message, error: true }));

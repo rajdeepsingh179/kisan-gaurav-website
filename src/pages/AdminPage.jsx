@@ -11,6 +11,7 @@ import useDocumentTitle from "../hooks/useDocumentTitle";
 import { apiFetch } from "../services/api";
 import ContentWorkspace from "../components/admin/ContentWorkspace";
 import AdminProfileMenu from "../components/admin/AdminProfileMenu";
+import CustomerActions from "../components/admin/CustomerActions";
 import AdminAccessSkeleton from "../components/admin/AdminAccessSkeleton";
 import MediaLibrary from "../components/admin/MediaLibrary";
 import { JsonMediaTextarea, MediaField } from "../components/admin/MediaPicker";
@@ -183,7 +184,7 @@ export default function AdminPage({ initialModule = "dashboard" }) {
           {active === "dashboard" && data ? <Dashboard data={data} onNavigate={selectModule} /> : null}
           {active === "media" ? <MediaLibrary setError={setError} setNotice={setNotice} /> : null}
           {active === "content" && Array.isArray(data) ? <ContentWorkspace rows={filtered} onReload={load} setError={setError} setNotice={setNotice} /> : null}
-          {active !== "dashboard" && active !== "media" && active !== "content" && Array.isArray(data) ? <DataTable module={active} rows={filtered} filtered={Boolean(query)} onEdit={openEditor} onDelete={remove} onReload={load} setError={setError} setNotice={setNotice} /> : null}
+          {active !== "dashboard" && active !== "media" && active !== "content" && Array.isArray(data) ? <DataTable module={active} rows={filtered} filtered={Boolean(query)} currentUser={user} onEdit={openEditor} onDelete={remove} onReload={load} setError={setError} setNotice={setNotice} /> : null}
         </div>
       </main>
       {editor ? <Editor module={active} value={editor} onClose={() => setEditor(null)} onSaved={async () => { setEditor(null); setNotice("Changes saved"); await load(); }} setError={setError} setNotice={setNotice} /> : null}
@@ -221,7 +222,7 @@ function Dashboard({ data, onNavigate }) {
   </div>;
 }
 
-function DataTable({ module, rows, filtered, onEdit, onDelete, onReload, setError, setNotice }) {
+function DataTable({ module, rows, filtered, currentUser, onEdit, onDelete, onReload, setError, setNotice }) {
   const config = columns[module] || []; const dragId = useRef(null);
   const request = async (path, options, message) => { try { await apiFetch(path, options); setNotice(message); await onReload(); } catch (reason) { setError(reason.message); } };
   const changeStatus = (row, status) => request(`/api/admin/orders/${row.id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }, "Order status updated");
@@ -238,14 +239,15 @@ function DataTable({ module, rows, filtered, onEdit, onDelete, onReload, setErro
   const actions = (row) => {
     if (module === "orders") return <select className="admin-status-select" value={row.status} onChange={(event) => changeStatus(row, event.target.value)}>{["pending","confirmed","packed","shipped","delivered","cancelled","returned","refunded"].map((value)=><option key={value}>{value}</option>)}</select>;
     if (module === "inventory") return <StockEditor row={row} onSave={updateStock} />;
-    if (["customers", "users"].includes(module)) return <select className="admin-status-select" aria-label={`Administrator role for ${row.email}`} value={isAdminRole(row.role) ? row.role : ""} onChange={(event)=>event.target.value && saveRole(row,event.target.value)}><option value="">No admin access</option><option value="ADMIN">Admin</option><option value="SUPER_ADMIN">Super Admin</option></select>;
+    if (module === "customers") return currentUser.role === "SUPER_ADMIN" ? <CustomerActions customer={row} onReload={onReload} setError={setError} setNotice={setNotice} /> : null;
+    if (module === "users") return currentUser.role === "SUPER_ADMIN" ? <select className="admin-status-select" aria-label={`Administrator role for ${row.email}`} value={isAdminRole(row.role) ? row.role : ""} onChange={(event)=>event.target.value && saveRole(row,event.target.value)}><option value="">No admin access</option><option value="ADMIN">Admin</option><option value="SUPER_ADMIN">Super Admin</option></select> : null;
     if (module === "reviews") return <div className="admin-row-actions"><button type="button" onClick={()=>moderate(row,{status:row.status==="published"?"rejected":"published"})}>{row.status==="published"?"Reject":"Approve"}</button><button type="button" onClick={()=>moderate(row,{featured:!row.featured})}>{row.featured?"Unfeature":"Feature"}</button><button type="button" className="is-danger" onClick={()=>onDelete(row)}><Trash2 /></button></div>;
     if (!editable.has(module)) return null;
     return <div className="admin-row-actions"><button type="button" onClick={()=>onEdit(row)}>Edit</button>{module==="products"?<button type="button" onClick={()=>duplicate(row)}>Duplicate</button>:null}{["products","categories"].includes(module)?<button type="button" className="is-danger" onClick={()=>onDelete(row)}><Trash2 /></button>:null}</div>;
   };
   if (!rows.length) return <section className="admin-panel"><Empty title={filtered ? "No matching records" : `No ${labelFor(module)} yet`} message={filtered ? "Try a broader search or clear the search field." : "Create the first record to start this workspace."} /></section>;
-  const hasActions=editable.has(module)||["orders","inventory","reviews","customers","users"].includes(module);
-  return <section className="admin-panel admin-data"><div className="admin-table-meta"><span><strong>{rows.length}</strong> records</span><span>{module==="categories"?"Drag rows to reorder":"Live database view"}</span></div><div className="admin-table-scroll" tabIndex="0" aria-label={`${labelFor(module)} table`}><table><thead><tr>{config.map(([,label])=><th scope="col" key={label}>{label}</th>)}{hasActions?<th scope="col"><span className="sr-only">Actions</span></th>:null}</tr></thead><tbody>{rows.map((row)=><tr draggable={module==="categories"} onDragStart={()=>{dragId.current=row.id;}} onDragOver={(event)=>module==="categories"&&event.preventDefault()} onDrop={()=>dropCategory(row.id)} key={row.id||row.key||row.month}>{config.map(([key])=><td key={key}>{renderCell(key,row[key])}</td>)}{hasActions?<td>{actions(row)}</td>:null}</tr>)}</tbody></table></div></section>;
+  const hasActions=editable.has(module)||["orders","inventory","reviews"].includes(module)||(currentUser.role==="SUPER_ADMIN"&&["customers","users"].includes(module));
+  return <section className="admin-panel admin-data"><div className="admin-table-meta"><span><strong>{rows.length}</strong> records</span><span>{module==="categories"?"Drag rows to reorder":"Live database view"}</span></div><div className="admin-table-scroll" tabIndex="0" aria-label={`${labelFor(module)} table`}><table><thead><tr>{config.map(([,label])=><th scope="col" key={label}>{label}</th>)}{hasActions?<th scope="col"><span className="sr-only">Actions</span></th>:null}</tr></thead><tbody>{rows.map((row)=><tr draggable={module==="categories"} onDragStart={()=>{dragId.current=row.id;}} onDragOver={(event)=>module==="categories"&&event.preventDefault()} onDrop={()=>dropCategory(row.id)} key={row.id||row.key||row.month}>{config.map(([key])=><td key={key}>{module==="customers"&&key==="name"?<span className="customer-name-cell"><strong>{row.name}</strong><Status value={String(row.status||"ACTIVE").toLowerCase()} /></span>:renderCell(key,row[key])}</td>)}{hasActions?<td>{actions(row)}</td>:null}</tr>)}</tbody></table></div></section>;
 }
 function StockEditor({ row, onSave }) { const [stock, setStock] = useState(row.stock); return <div className="admin-stock-edit"><input aria-label={`Stock for ${row.product_name} ${row.name}`} type="number" min="0" value={stock} onChange={(event) => setStock(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && Number(stock) !== Number(row.stock)) onSave(row, stock); }} /><button type="button" disabled={Number(stock) === Number(row.stock)} onClick={() => onSave(row, stock)}>Save</button></div>; }
 

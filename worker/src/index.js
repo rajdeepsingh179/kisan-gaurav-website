@@ -13,6 +13,28 @@ import {
 
 const app = new Hono();
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const ACCOUNT_AUTH_PATHS = new Set([
+  "/api/account/signup",
+  "/api/account/verify-email",
+  "/api/account/forgot-password",
+  "/api/account/reset-password",
+  "/api/admin/account/password",
+]);
+const hasControlCharacter = (value) => [...value].some((character) => {
+  const code = character.charCodeAt(0);
+  return code < 32 || code === 127;
+});
+const authFailureCategory = (path, code, status) => {
+  if (path.includes("verify-email")) return "email_verification";
+  if (path.includes("password")) return "password";
+  if (path.includes("signup")) return "registration";
+  if (path.startsWith("/api/auth/")) {
+    if (/oauth|callback/i.test(code || "")) return "oauth";
+    if (/jwt|session/i.test(code || "")) return "session";
+    return "authjs";
+  }
+  return status >= 500 ? "database" : "authentication";
+};
 const trustedOrigins = (c) => new Set([
   c.env.FRONTEND_URL,
   "https://kisangaurav.com",
@@ -58,7 +80,9 @@ app.use("*", async (c, next) => {
     if (profile) await enforceRateLimit(c, profile);
   }
   await next();
-  if (c.req.path.startsWith("/api/admin/") || c.req.path.startsWith("/api/auth/")) c.header("Cache-Control", "private, no-store");
+  if (c.req.path.startsWith("/api/admin/") || c.req.path.startsWith("/api/auth/") || c.req.path.startsWith("/api/account/")) {
+    c.header("Cache-Control", "private, no-store");
+  }
 });
 
 const sessionFor = (c) => getSession(c.req.raw, c.env);
@@ -80,6 +104,19 @@ const body = async (c) => {
 
 app.onError(async (error, c) => {
   const normalizedError = error instanceof HTTPError ? error : databaseHTTPError(error);
+  const status = normalizedError?.status || 500;
+  if (c.req.path.startsWith("/api/auth/") || ACCOUNT_AUTH_PATHS.has(c.req.path)) {
+    console[status >= 500 ? "error" : "warn"](json({
+      event: "authentication_request_failed",
+      category: authFailureCategory(c.req.path, normalizedError?.code, status),
+      requestId: c.get("requestId"),
+      status,
+      code: normalizedError?.code || "internal_error",
+      method: c.req.method,
+      path: c.req.path,
+      ip: c.req.header("CF-Connecting-IP") || null,
+    }));
+  }
   if (normalizedError && [401, 403, 429].includes(normalizedError.status)) {
     console.warn(json({ event: "security_request_rejected", requestId: c.get("requestId"), status: normalizedError.status, code: normalizedError.code, method: c.req.method, path: c.req.path, ip: c.req.header("CF-Connecting-IP") || null }));
   }
@@ -114,22 +151,41 @@ app.post("/api/account/signup", async (c) => {
   const firstName = String(data.firstName || "").trim();
   const lastName = String(data.lastName || "").trim();
   const name = `${firstName} ${lastName}`.trim();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !firstName || !lastName) {
+  if (
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+    || email.length > 254
+    || !firstName
+    || !lastName
+    || firstName.length > 80
+    || lastName.length > 80
+    || hasControlCharacter(name)
+  ) {
     throw new HTTPError(400, "First name, last name, and a valid email are required.");
   }
   const passwordError = passwordValidationError(data.password);
   if (passwordError) throw new HTTPError(400, passwordError, "weak_password");
-  const existing = await c.env.DB.prepare("SELECT id,password_hash FROM users WHERE email=?1").bind(email).first();
+  let existing = await c.env.DB.prepare("SELECT id,password_hash,account_status,blacklisted FROM users WHERE email=?1").bind(email).first();
+  if (existing?.blacklisted) {
+    throw new HTTPError(403, "This account is restricted. Please contact Kisan Gaurav support.", "account_restricted");
+  }
   if (existing?.password_hash) throw new HTTPError(409, "An account already exists for this email. Sign in or reset your password.", "account_exists");
   const password = await hashPassword(String(data.password));
-  const userId = existing?.id || id();
+  const proposedUserId = existing?.id || id();
+  if (!existing) {
+    await c.env.DB.prepare(
+      "INSERT INTO users(id,email,name,first_name,last_name) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(email) DO NOTHING",
+    ).bind(proposedUserId, email, name, firstName, lastName).run();
+    existing = await c.env.DB.prepare("SELECT id,password_hash,account_status,blacklisted FROM users WHERE email=?1").bind(email).first();
+    if (existing?.blacklisted) {
+      throw new HTTPError(403, "This account is restricted. Please contact Kisan Gaurav support.", "account_restricted");
+    }
+    if (existing?.password_hash) throw new HTTPError(409, "An account already exists for this email. Sign in or reset your password.", "account_exists");
+  }
+  const userId = existing?.id || proposedUserId;
   const rawToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
   const tokenHash = await sha256(rawToken);
   const verificationUrl = `${c.env.FRONTEND_URL.replace(/\/$/, "")}/verify-email?token=${encodeURIComponent(rawToken)}`;
   await c.env.DB.batch([
-    ...(existing
-      ? [c.env.DB.prepare("UPDATE users SET name=?1,first_name=?2,last_name=?3,updated_at=CURRENT_TIMESTAMP WHERE id=?4").bind(name, firstName, lastName, userId)]
-      : [c.env.DB.prepare("INSERT INTO users(id,email,name,first_name,last_name) VALUES(?1,?2,?3,?4,?5)").bind(userId, email, name, firstName, lastName)]),
     c.env.DB.prepare("DELETE FROM email_verification_tokens WHERE user_id=?1 OR expires_at<CURRENT_TIMESTAMP").bind(userId),
     c.env.DB.prepare("INSERT INTO email_verification_tokens(token_hash,user_id,pending_password_hash,pending_password_salt,pending_password_iterations,expires_at) VALUES(?1,?2,?3,?4,?5,datetime('now','+24 hours'))").bind(tokenHash, userId, password.hash, password.salt, password.iterations),
     c.env.DB.prepare("INSERT INTO notifications(id,user_id,channel,event_type,recipient,payload_json) VALUES(?1,?2,'email','email_verification',?3,?4)").bind(id(), userId, email, json({ name, verificationUrl })),
@@ -140,22 +196,33 @@ app.post("/api/account/signup", async (c) => {
 app.post("/api/account/verify-email", async (c) => {
   const data = await body(c);
   const tokenHash = await sha256(String(data.token || ""));
-  const token = await c.env.DB.prepare("SELECT * FROM email_verification_tokens WHERE token_hash=?1 AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP").bind(tokenHash).first();
-  if (!token) throw new HTTPError(400, "Verification link is invalid or expired.", "invalid_verification_token");
-  const user = await c.env.DB.prepare("SELECT email,name FROM users WHERE id=?1").bind(token.user_id).first();
-  if (!user) throw new HTTPError(400, "Verification link is invalid or expired.", "invalid_verification_token");
-  await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,password_iterations=?3,email_verified_at=COALESCE(email_verified_at,CURRENT_TIMESTAMP),failed_login_count=0,locked_until=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?4").bind(token.pending_password_hash, token.pending_password_salt, token.pending_password_iterations, token.user_id),
-    c.env.DB.prepare("UPDATE email_verification_tokens SET used_at=CURRENT_TIMESTAMP WHERE token_hash=?1").bind(tokenHash),
-    c.env.DB.prepare("DELETE FROM email_verification_tokens WHERE user_id=?1 AND token_hash<>?2").bind(token.user_id, tokenHash),
-    c.env.DB.prepare("INSERT INTO notifications(id,user_id,channel,event_type,recipient,payload_json) VALUES(?1,?2,'email','welcome',?3,?4)").bind(id(), token.user_id, user.email, json({ name: user.name })),
+  const results = await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE users SET
+      password_hash=(SELECT pending_password_hash FROM email_verification_tokens WHERE token_hash=?1 AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP),
+      password_salt=(SELECT pending_password_salt FROM email_verification_tokens WHERE token_hash=?1 AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP),
+      password_iterations=(SELECT pending_password_iterations FROM email_verification_tokens WHERE token_hash=?1 AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP),
+      email_verified_at=COALESCE(email_verified_at,CURRENT_TIMESTAMP),failed_login_count=0,locked_until=NULL,updated_at=CURRENT_TIMESTAMP
+      WHERE id=(SELECT user_id FROM email_verification_tokens WHERE token_hash=?1 AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP)`).bind(tokenHash),
+    c.env.DB.prepare("UPDATE email_verification_tokens SET used_at=CURRENT_TIMESTAMP WHERE token_hash=?1 AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP").bind(tokenHash),
   ]);
+  if (Number(results[0]?.meta?.changes || 0) !== 1 || Number(results[1]?.meta?.changes || 0) !== 1) {
+    throw new HTTPError(400, "Verification link is invalid or expired.", "invalid_verification_token");
+  }
+  const user = await c.env.DB.prepare(
+    "SELECT u.id,u.email,u.name FROM users u JOIN email_verification_tokens evt ON evt.user_id=u.id WHERE evt.token_hash=?1",
+  ).bind(tokenHash).first();
+  if (user) {
+    await c.env.DB.batch([
+      c.env.DB.prepare("DELETE FROM email_verification_tokens WHERE user_id=?1 AND token_hash<>?2").bind(user.id, tokenHash),
+      c.env.DB.prepare("INSERT INTO notifications(id,user_id,channel,event_type,recipient,payload_json) VALUES(?1,?2,'email','welcome',?3,?4)").bind(id(), user.id, user.email, json({ name: user.name })),
+    ]);
+  }
   return c.json({ ok: true, message: "Email verified. You can now sign in." });
 });
 
 app.post("/api/account/forgot-password", async (c) => {
   const data = await body(c);
-  const user = await c.env.DB.prepare("SELECT id,email FROM users WHERE email=?1 AND email_verified_at IS NOT NULL").bind(String(data.email || "").trim().toLowerCase()).first();
+  const user = await c.env.DB.prepare("SELECT id,email FROM users WHERE email=?1 AND email_verified_at IS NOT NULL AND account_status='ACTIVE' AND blacklisted=0").bind(String(data.email || "").trim().toLowerCase()).first();
   if (user) {
     const rawToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
     const tokenHash = await sha256(rawToken);
@@ -173,14 +240,19 @@ app.post("/api/account/reset-password", async (c) => {
   const passwordError = passwordValidationError(data.password);
   if (passwordError) throw new HTTPError(400, passwordError, "weak_password");
   const tokenHash = await sha256(String(data.token || ""));
-  const token = await c.env.DB.prepare("SELECT * FROM password_reset_tokens WHERE token_hash=?1 AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP").bind(tokenHash).first();
-  if (!token) throw new HTTPError(400, "Reset link is invalid or expired.");
   const password = await hashPassword(String(data.password));
-  await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,password_iterations=?3,session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?4").bind(password.hash, password.salt, password.iterations, token.user_id),
-    c.env.DB.prepare("UPDATE password_reset_tokens SET used_at=CURRENT_TIMESTAMP WHERE token_hash=?1").bind(tokenHash),
+  const results = await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE users SET password_hash=?1,password_salt=?2,password_iterations=?3,
+      must_change_password=0,failed_login_count=0,locked_until=NULL,session_version=session_version+1,updated_at=CURRENT_TIMESTAMP
+      WHERE account_status='ACTIVE' AND blacklisted=0
+        AND id=(SELECT user_id FROM password_reset_tokens WHERE token_hash=?4 AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP)`)
+      .bind(password.hash, password.salt, password.iterations, tokenHash),
+    c.env.DB.prepare("UPDATE password_reset_tokens SET used_at=CURRENT_TIMESTAMP WHERE token_hash=?1 AND used_at IS NULL AND expires_at>CURRENT_TIMESTAMP").bind(tokenHash),
   ]);
-  return c.json({ ok: true });
+  if (Number(results[0]?.meta?.changes || 0) !== 1 || Number(results[1]?.meta?.changes || 0) !== 1) {
+    throw new HTTPError(400, "Reset link is invalid or expired.", "invalid_reset_token");
+  }
+  return c.json({ ok: true, message: "Password reset successfully. Sign in with your new password." });
 });
 
 app.get("/api/account/profile", async (c) => {
@@ -233,16 +305,35 @@ app.put("/api/customer-state/:key", async (c) => {
   return c.json({ ok: true });
 });
 
-app.post("/api/checkout/quote", async (c) => c.json(await calculateCheckout(c.env, await body(c))));
+const assertCustomerCanPurchase = async (c, payload, session = null) => {
+  const email = String(payload?.customer?.email || "").trim().toLowerCase();
+  const userId = session?.user?.id || null;
+  const customer = userId
+    ? await c.env.DB.prepare("SELECT account_status,blacklisted FROM users WHERE id=?1").bind(userId).first()
+    : email
+      ? await c.env.DB.prepare("SELECT account_status,blacklisted FROM users WHERE email=?1").bind(email).first()
+      : null;
+  if (customer && (customer.account_status !== "ACTIVE" || customer.blacklisted)) {
+    throw new HTTPError(403, "This account is restricted. Please contact Kisan Gaurav support.", "account_restricted");
+  }
+};
+app.post("/api/checkout/quote", async (c) => {
+  const data = await body(c);
+  await assertCustomerCanPurchase(c, data, await sessionFor(c));
+  return c.json(await calculateCheckout(c.env, data));
+});
 app.post("/api/orders", async (c) => {
   const data = validateOrderRequest(await body(c)); const session = await sessionFor(c);
+  await assertCustomerCanPurchase(c, data, session);
   const checkout = await calculateCheckout(c.env, data);
   if (data.paymentMethod !== "cod") throw new HTTPError(400, "Use the payment order endpoint for online payments.");
   const order = await persistOrder(c.env, data, checkout, session?.user?.id, { method: "cod", status: "pending" });
   return c.json(order, 201);
 });
 app.post("/api/payments/razorpay/order", async (c) => {
-  const data = validateOrderRequest(await body(c)); const session = await sessionFor(c); const checkout = await calculateCheckout(c.env, data);
+  const data = validateOrderRequest(await body(c)); const session = await sessionFor(c);
+  await assertCustomerCanPurchase(c, data, session);
+  const checkout = await calculateCheckout(c.env, data);
   const response = await fetch("https://api.razorpay.com/v1/orders", { method: "POST", headers: { Authorization: `Basic ${btoa(`${c.env.RAZORPAY_KEY_ID}:${c.env.RAZORPAY_KEY_SECRET}`)}`, "Content-Type": "application/json" }, body: json({ amount: checkout.totalPaise, currency: "INR", receipt: `kg_${Date.now()}` }) });
   if (!response.ok) throw new HTTPError(502, "Unable to create payment order.");
   const razorpay = await response.json();
@@ -262,6 +353,7 @@ app.post("/api/payments/razorpay/verify", async (c) => {
   if (!intent) throw new HTTPError(404, "Payment intent not found.");
   const stored = JSON.parse(intent.value_json);
   if (stored.expiresAt < Date.now()) throw new HTTPError(400, "Payment intent expired.");
+  await assertCustomerCanPurchase(c, stored.payload, stored.userId ? { user: { id: stored.userId } } : null);
   const order = await persistOrder(c.env, stored.payload, stored.checkout, stored.userId, { method: "razorpay", status: "paid", orderId: data.razorpay_order_id, paymentId: data.razorpay_payment_id, intentKey: `payment_intent:${data.razorpay_order_id}` });
   return c.json(order);
 });
@@ -359,10 +451,12 @@ const cmsUser = async (c) => {
   if (!assigned || !ADMIN_ROLES.has(assigned.role)) throw new HTTPError(403, "You do not have administrator permissions.");
   return { ...user, role: assigned.role };
 };
-export const canAccess = (role, path, method) => {
+export const canAccess = (role, path) => {
   if (!ADMIN_ROLES.has(role)) return false;
   if (role === "SUPER_ADMIN") return true;
-  return !path.includes("/permissions") && !(method === "DELETE" && path.includes("/customers"));
+  if (path.includes("/permissions")) return false;
+  if (/^\/api\/admin\/customers\/[^/]+(?:\/|$)/.test(path)) return false;
+  return true;
 };
 const auditStatement = (c, action, resourceType, resourceId, details = {}) => {
   const context = {
@@ -377,6 +471,40 @@ const auditStatement = (c, action, resourceType, resourceId, details = {}) => {
 };
 const audit = (c, action, resourceType, resourceId, details = {}) =>
   auditStatement(c, action, resourceType, resourceId, details).run();
+const customerRecord = (c, customerId) => c.env.DB.prepare(
+  `SELECT u.*,COALESCE(p.role,u.role) effective_role,
+    CASE WHEN u.blacklisted=1 THEN 'BLACKLISTED' ELSE u.account_status END status
+   FROM users u LEFT JOIN user_permissions p ON p.user_id=u.id WHERE u.id=?1`,
+).bind(customerId).first();
+const activeSuperAdminCount = async (c) => {
+  const row = await c.env.DB.prepare(
+    `SELECT COUNT(*) count FROM user_permissions p JOIN users u ON u.id=p.user_id
+     WHERE p.role='SUPER_ADMIN' AND u.account_status='ACTIVE' AND u.blacklisted=0`,
+  ).first();
+  return Number(row?.count || 0);
+};
+const assertCustomerTargetSafe = async (c, target, restricting = false) => {
+  if (!target) throw new HTTPError(404, "Customer not found.", "customer_not_found");
+  const admin = c.get("admin");
+  if (target.id === admin.id && restricting) {
+    throw new HTTPError(409, "You cannot restrict or delete your own signed-in account.", "self_account_protected");
+  }
+  if (
+    restricting
+    && target.effective_role === "SUPER_ADMIN"
+    && target.account_status === "ACTIVE"
+    && !target.blacklisted
+    && await activeSuperAdminCount(c) <= 1
+  ) {
+    throw new HTTPError(409, "The last active Super Admin cannot be restricted, deleted, or demoted.", "last_super_admin");
+  }
+};
+const customerAuditDetails = (c, target, details = {}) => ({
+  customerId: target.id,
+  customerEmail: target.email,
+  adminEmail: c.get("admin").email,
+  ...details,
+});
 const MEDIA_FOLDERS = new Set(["products", "categories", "banners", "cms", "homepage", "blog", "seo", "general"]);
 const mediaFolder = (value) => {
   const folder = String(value || "general").trim().toLowerCase();
@@ -439,9 +567,10 @@ app.use("/api/admin/*", async (c, next) => {
 });
 app.patch("/api/admin/account/password", async (c) => {
   const admin=c.get("admin");const data=await body(c);
-  if(String(data.newPassword||"").length<12)throw new HTTPError(400,"New password must contain at least 12 characters.");
-  const stored=await c.env.DB.prepare("SELECT password_hash,password_salt FROM users WHERE id=?1").bind(admin.id).first();
-  if(!stored?.password_hash||!(await verifyPassword(String(data.currentPassword||""),stored.password_salt,stored.password_hash)))throw new HTTPError(400,"Current password is incorrect.");
+  const validationError=passwordValidationError(data.newPassword);
+  if(validationError)throw new HTTPError(400,validationError,"weak_password");
+  const stored=await c.env.DB.prepare("SELECT password_hash,password_salt,password_iterations FROM users WHERE id=?1").bind(admin.id).first();
+  if(!stored?.password_hash||!(await verifyPassword(String(data.currentPassword||""),stored.password_salt,stored.password_hash,Number(stored.password_iterations))))throw new HTTPError(400,"Current password is incorrect.","invalid_current_password");
   const password=await hashPassword(String(data.newPassword));
   await c.env.DB.prepare("UPDATE users SET password_hash=?1,password_salt=?2,password_iterations=?3,must_change_password=0,session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?4").bind(password.hash,password.salt,password.iterations,admin.id).run();
   await audit(c,"password_changed","user",admin.id);
@@ -535,14 +664,180 @@ app.patch("/api/admin/media/:id", async (c) => {
   await audit(c, "organized", "media", current.id, { folder, altText });
   return c.json({ ...current, folder, alt_text: altText });
 });
+app.get("/api/admin/customers/:id", async (c) => {
+  const target = await customerRecord(c, c.req.param("id"));
+  await assertCustomerTargetSafe(c, target);
+  const [addresses, accounts, summary] = await c.env.DB.batch([
+    c.env.DB.prepare("SELECT * FROM addresses WHERE user_id=?1 ORDER BY is_default DESC,created_at DESC").bind(target.id),
+    c.env.DB.prepare("SELECT provider,created_at FROM auth_accounts WHERE user_id=?1 ORDER BY created_at").bind(target.id),
+    c.env.DB.prepare("SELECT COUNT(*) orders_count,COALESCE(SUM(total_paise),0) lifetime_value_paise,MAX(created_at) last_order_at FROM orders WHERE user_id=?1").bind(target.id),
+  ]);
+  return c.json({
+    customer: target,
+    addresses: addresses.results,
+    providers: accounts.results,
+    orderSummary: summary.results[0] || {},
+  });
+});
+
+app.get("/api/admin/customers/:id/orders", async (c) => {
+  const target = await customerRecord(c, c.req.param("id"));
+  await assertCustomerTargetSafe(c, target);
+  return c.json((await c.env.DB.prepare(
+    "SELECT id,order_number,status,payment_status,total_paise,created_at FROM orders WHERE user_id=?1 ORDER BY created_at DESC LIMIT 250",
+  ).bind(target.id).all()).results);
+});
+
+app.patch("/api/admin/customers/:id", async (c) => {
+  const target = await customerRecord(c, c.req.param("id"));
+  await assertCustomerTargetSafe(c, target);
+  const data = await body(c);
+  const firstName = String(data.firstName ?? target.first_name ?? "").trim();
+  const lastName = String(data.lastName ?? target.last_name ?? "").trim();
+  const name = String(data.name || `${firstName} ${lastName}`.trim()).trim();
+  const mobile = String(data.mobile || "").trim();
+  if (!name || name.length > 160 || firstName.length > 80 || lastName.length > 80 || hasControlCharacter(name)) {
+    throw new HTTPError(400, "Customer name is invalid.", "invalid_customer");
+  }
+  if (mobile && !/^[+0-9 ()-]{7,24}$/.test(mobile)) throw new HTTPError(400, "Mobile number is invalid.", "invalid_customer");
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE users SET name=?1,first_name=?2,last_name=?3,mobile=?4,updated_at=CURRENT_TIMESTAMP WHERE id=?5")
+      .bind(name, firstName || null, lastName || null, mobile || null, target.id),
+    auditStatement(c, "customer_updated", "customer", target.id, customerAuditDetails(c, target, { fields: ["name","firstName","lastName","mobile"] })),
+  ]);
+  return c.json({ ok: true });
+});
+
+app.post("/api/admin/customers/:id/password-reset", async (c) => {
+  const target = await customerRecord(c, c.req.param("id"));
+  await assertCustomerTargetSafe(c, target);
+  if (target.account_status !== "ACTIVE" || target.blacklisted || !target.email_verified_at) {
+    throw new HTTPError(409, "A reset email cannot be sent while this account is restricted or unverified.", "customer_restricted");
+  }
+  const rawToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+  const tokenHash = await sha256(rawToken);
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM password_reset_tokens WHERE user_id=?1 OR expires_at<CURRENT_TIMESTAMP").bind(target.id),
+    c.env.DB.prepare("INSERT INTO password_reset_tokens(token_hash,user_id,expires_at) VALUES(?1,?2,datetime('now','+1 hour'))").bind(tokenHash,target.id),
+    c.env.DB.prepare("INSERT INTO notifications(id,user_id,channel,event_type,recipient,payload_json) VALUES(?1,?2,'email','password_reset',?3,?4)")
+      .bind(id(),target.id,target.email,json({ resetUrl: `${c.env.FRONTEND_URL.replace(/\/$/, "")}/reset-password?token=${rawToken}` })),
+    auditStatement(c, "password_reset_sent", "customer", target.id, customerAuditDetails(c, target)),
+  ]);
+  return c.json({ ok: true, message: "Password reset email queued." });
+});
+
+app.post("/api/admin/customers/:id/resend-verification", async (c) => {
+  const target = await customerRecord(c, c.req.param("id"));
+  await assertCustomerTargetSafe(c, target);
+  if (target.email_verified_at) throw new HTTPError(409, "This email is already verified.", "already_verified");
+  if (target.account_status !== "ACTIVE" || target.blacklisted) throw new HTTPError(409, "Verification cannot be sent to a restricted account.", "customer_restricted");
+  const pending = await c.env.DB.prepare(
+    "SELECT pending_password_hash,pending_password_salt,pending_password_iterations FROM email_verification_tokens WHERE user_id=?1 AND used_at IS NULL ORDER BY created_at DESC LIMIT 1",
+  ).bind(target.id).first();
+  if (!pending?.pending_password_hash) throw new HTTPError(409, "No pending email registration was found.", "verification_not_pending");
+  const rawToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+  const tokenHash = await sha256(rawToken);
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM email_verification_tokens WHERE user_id=?1 OR expires_at<CURRENT_TIMESTAMP").bind(target.id),
+    c.env.DB.prepare("INSERT INTO email_verification_tokens(token_hash,user_id,pending_password_hash,pending_password_salt,pending_password_iterations,expires_at) VALUES(?1,?2,?3,?4,?5,datetime('now','+24 hours'))")
+      .bind(tokenHash,target.id,pending.pending_password_hash,pending.pending_password_salt,pending.pending_password_iterations),
+    c.env.DB.prepare("INSERT INTO notifications(id,user_id,channel,event_type,recipient,payload_json) VALUES(?1,?2,'email','email_verification',?3,?4)")
+      .bind(id(),target.id,target.email,json({ name: target.name, verificationUrl: `${c.env.FRONTEND_URL.replace(/\/$/, "")}/verify-email?token=${encodeURIComponent(rawToken)}` })),
+    auditStatement(c, "verification_email_resent", "customer", target.id, customerAuditDetails(c, target)),
+  ]);
+  return c.json({ ok: true, message: "Verification email queued." });
+});
+
+app.patch("/api/admin/customers/:id/status", async (c) => {
+  const target = await customerRecord(c, c.req.param("id"));
+  const data = await body(c);
+  const action = String(data.action || "").toLowerCase();
+  if (!["suspend","activate","blacklist","unblacklist","delete"].includes(action)) {
+    throw new HTTPError(400, "Invalid customer status action.", "invalid_status_action");
+  }
+  const restricting = ["suspend","blacklist","delete"].includes(action);
+  await assertCustomerTargetSafe(c, target, restricting);
+  const reason = String(data.reason || "").trim().slice(0, 500) || null;
+  const updates = {
+    suspend: ["account_status='SUSPENDED',suspended_at=CURRENT_TIMESTAMP,deleted_at=NULL", "customer_suspended"],
+    activate: ["account_status='ACTIVE',suspended_at=NULL,deleted_at=NULL,failed_login_count=0,locked_until=NULL", "customer_activated"],
+    blacklist: ["blacklisted=1,blacklisted_at=CURRENT_TIMESTAMP", "customer_blacklisted"],
+    unblacklist: ["blacklisted=0,blacklisted_at=NULL,failed_login_count=0,locked_until=NULL", "customer_blacklist_removed"],
+    delete: ["account_status='DELETED',deleted_at=CURRENT_TIMESTAMP,suspended_at=NULL", "customer_soft_deleted"],
+  };
+  const [assignment, auditAction] = updates[action];
+  await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE users SET ${assignment},status_reason=?1,status_changed_at=CURRENT_TIMESTAMP,status_changed_by=?2,session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?3`)
+      .bind(reason,c.get("admin").id,target.id),
+    ...(restricting ? [
+      c.env.DB.prepare("DELETE FROM password_reset_tokens WHERE user_id=?1").bind(target.id),
+      c.env.DB.prepare("DELETE FROM email_verification_tokens WHERE user_id=?1").bind(target.id),
+    ] : []),
+    auditStatement(c, auditAction, "customer", target.id, customerAuditDetails(c, target, { reason, sessionsRevoked: true })),
+  ]);
+  return c.json({ ok: true });
+});
+
+app.delete("/api/admin/customers/:id", async (c) => {
+  const target = await customerRecord(c, c.req.param("id"));
+  const data = await body(c);
+  if (data.confirmation !== "DELETE") throw new HTTPError(400, "Type DELETE to confirm permanent deletion.", "confirmation_required");
+  await assertCustomerTargetSafe(c, target, true);
+  const anonymizedEmail = `deleted+${target.id}@invalid.local`;
+  const statements = [
+    auditStatement(c, "customer_permanently_deleted", "customer", target.id, customerAuditDetails(c, target, { irreversible: true })),
+  ];
+  if (target.profile_photo_url) {
+    try {
+      const pathname = new URL(target.profile_photo_url, c.req.url).pathname;
+      const marker = "/api/media/";
+      const objectKey = pathname.includes(marker) ? decodeURIComponent(pathname.slice(pathname.indexOf(marker) + marker.length)) : null;
+      if (objectKey?.startsWith(`profiles/${target.id}/`)) {
+        statements.push(c.env.DB.prepare("INSERT INTO media_deletion_queue(asset_id,object_key) VALUES(?1,?2)").bind(`customer-profile:${target.id}`,objectKey));
+      }
+    } catch { /* A malformed legacy URL is not an R2 deletion target. */ }
+  }
+  statements.push(
+    c.env.DB.prepare("INSERT INTO media_deletion_queue(asset_id,object_key) SELECT 'customer-invoice:'||id,invoice_key FROM orders WHERE user_id=?1 AND invoice_key IS NOT NULL").bind(target.id),
+    c.env.DB.prepare("DELETE FROM returns WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM reviews WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM notifications WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM analytics_events WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM customer_state WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM addresses WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM wishlist_items WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM carts WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM password_reset_tokens WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM email_verification_tokens WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM auth_accounts WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM admin_login_attempts WHERE email=?1").bind(target.email),
+    c.env.DB.prepare("DELETE FROM settings WHERE key LIKE 'payment_intent:%' AND (instr(value_json,?1)>0 OR instr(value_json,?2)>0)").bind(target.id,target.email),
+    c.env.DB.prepare("UPDATE coupon_redemptions SET user_id=NULL WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("UPDATE inventory_history SET actor_user_id=NULL WHERE actor_user_id=?1").bind(target.id),
+    c.env.DB.prepare("UPDATE inventory_mutations SET actor_user_id=NULL WHERE actor_user_id=?1").bind(target.id),
+    c.env.DB.prepare("UPDATE order_transitions SET actor_user_id=NULL WHERE actor_user_id=?1").bind(target.id),
+    c.env.DB.prepare("UPDATE cms_entries SET created_by=NULL WHERE created_by=?1").bind(target.id),
+    c.env.DB.prepare("UPDATE cms_entries SET updated_by=NULL WHERE updated_by=?1").bind(target.id),
+    c.env.DB.prepare("UPDATE cms_versions SET created_by=NULL WHERE created_by=?1").bind(target.id),
+    c.env.DB.prepare("UPDATE email_templates SET updated_by=NULL WHERE updated_by=?1").bind(target.id),
+    c.env.DB.prepare("UPDATE media_assets SET created_by=NULL WHERE created_by=?1").bind(target.id),
+    c.env.DB.prepare("UPDATE activity_logs SET actor_user_id=NULL WHERE actor_user_id=?1").bind(target.id),
+    c.env.DB.prepare("UPDATE orders SET user_id=NULL,customer_name='Deleted customer',customer_email=?1,customer_mobile='deleted',shipping_address_json='{}',invoice_key=NULL,updated_at=CURRENT_TIMESTAMP WHERE user_id=?2").bind(anonymizedEmail,target.id),
+    c.env.DB.prepare("DELETE FROM user_permissions WHERE user_id=?1").bind(target.id),
+    c.env.DB.prepare("DELETE FROM users WHERE id=?1").bind(target.id),
+  );
+  await c.env.DB.batch(statements);
+  return c.json({ ok: true });
+});
+
 app.get("/api/admin/:resource", async (c) => {
   const resource = c.req.param("resource");
   const queries = {
     products: "SELECT p.*,c.name category_name,(SELECT COUNT(*) FROM product_variants v WHERE v.product_id=p.id AND v.archived=0) variant_count,(SELECT COALESCE(SUM(stock),0) FROM product_variants v WHERE v.product_id=p.id AND v.archived=0) stock FROM products p JOIN categories c ON c.id=p.category_id ORDER BY p.archived,p.updated_at DESC",
     categories: "SELECT * FROM categories ORDER BY sort_order,name",
     orders: "SELECT * FROM orders ORDER BY created_at DESC LIMIT 250",
-    customers: "SELECT u.id,u.email,u.name,u.mobile,COALESCE(up.role,u.role) role,u.created_at,(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) orders_count,(SELECT COALESCE(SUM(total_paise),0) FROM orders o WHERE o.user_id=u.id) lifetime_value_paise FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id ORDER BY u.created_at DESC LIMIT 500",
-    users: "SELECT u.id,u.email,u.name,u.mobile,COALESCE(up.role,u.role) role,u.created_at,(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) orders_count,(SELECT COALESCE(SUM(total_paise),0) FROM orders o WHERE o.user_id=u.id) lifetime_value_paise FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id ORDER BY u.created_at DESC LIMIT 500",
+    customers: "SELECT u.id,u.email,u.name,u.first_name,u.last_name,u.mobile,u.email_verified_at,u.account_status,u.blacklisted,CASE WHEN u.blacklisted=1 THEN 'BLACKLISTED' ELSE u.account_status END status,COALESCE(up.role,u.role) role,u.created_at,(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) orders_count,(SELECT COALESCE(SUM(total_paise),0) FROM orders o WHERE o.user_id=u.id) lifetime_value_paise FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id ORDER BY u.created_at DESC LIMIT 500",
+    users: "SELECT u.id,u.email,u.name,u.mobile,u.account_status,u.blacklisted,COALESCE(up.role,u.role) role,u.created_at,(SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) orders_count,(SELECT COALESCE(SUM(total_paise),0) FROM orders o WHERE o.user_id=u.id) lifetime_value_paise FROM users u LEFT JOIN user_permissions up ON up.user_id=u.id ORDER BY u.created_at DESC LIMIT 500",
     inventory: "SELECT v.*,p.name product_name FROM product_variants v JOIN products p ON p.id=v.product_id WHERE v.archived=0 AND p.archived=0 ORDER BY v.stock",
     coupons: "SELECT * FROM coupons ORDER BY created_at DESC",
     reviews: "SELECT r.*,p.name product_name,u.name customer_name FROM reviews r JOIN products p ON p.id=r.product_id JOIN users u ON u.id=r.user_id ORDER BY r.created_at DESC",
@@ -1019,12 +1314,21 @@ app.post("/api/admin/seo", async (c) => {
 app.put("/api/admin/permissions/:userId", async (c) => {
   const data=await body(c);
   if(!["SUPER_ADMIN","ADMIN"].includes(data.role))throw new HTTPError(400,"Invalid administrator role.");
-  const target = await c.env.DB.prepare("SELECT u.id,COALESCE(p.role,u.role) role FROM users u LEFT JOIN user_permissions p ON p.user_id=u.id WHERE u.id=?1").bind(c.req.param("userId")).first();
+  const target = await c.env.DB.prepare("SELECT u.id,u.email,u.account_status,u.blacklisted,COALESCE(p.role,u.role) role FROM users u LEFT JOIN user_permissions p ON p.user_id=u.id WHERE u.id=?1").bind(c.req.param("userId")).first();
   if (!target) throw new HTTPError(404, "User not found.");
+  if (
+    target.role === "SUPER_ADMIN"
+    && data.role !== "SUPER_ADMIN"
+    && target.account_status === "ACTIVE"
+    && !target.blacklisted
+    && await activeSuperAdminCount(c) <= 1
+  ) {
+    throw new HTTPError(409, "The last active Super Admin cannot be demoted.", "last_super_admin");
+  }
   await c.env.DB.batch([
     c.env.DB.prepare("INSERT INTO user_permissions(user_id,role) VALUES(?1,?2) ON CONFLICT(user_id) DO UPDATE SET role=excluded.role,updated_at=CURRENT_TIMESTAMP").bind(target.id,data.role),
     c.env.DB.prepare("UPDATE users SET session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?1").bind(target.id),
-    auditStatement(c,"role_changed","user",target.id,{previousRole:target.role,newRole:data.role,sessionsRevoked:true}),
+    auditStatement(c,"role_changed","user",target.id,{customerId:target.id,customerEmail:target.email,adminEmail:c.get("admin").email,previousRole:target.role,newRole:data.role,sessionsRevoked:true}),
   ]);
   return c.json({ok:true});
 });
@@ -1063,15 +1367,42 @@ export default {
         console.error("Media hash backfill failed", { assetId: asset.id, error: String(error?.message || error) });
       }
     }
-    if (!env.NOTIFICATION_WEBHOOK) return;
-    const queued = (await env.DB.prepare("SELECT * FROM notifications WHERE status='queued' ORDER BY created_at LIMIT 50").all()).results;
+    if (!env.NOTIFICATION_WEBHOOK || !env.NOTIFICATION_WEBHOOK_SECRET) {
+      const pendingAuthenticationEmail = await env.DB.prepare(
+        "SELECT COUNT(*) count FROM notifications WHERE status IN ('queued','failed') AND event_type IN ('email_verification','password_reset') AND attempts<5",
+      ).first();
+      if (Number(pendingAuthenticationEmail?.count || 0) > 0) {
+        console.error(json({
+          event: "authentication_email_delivery_unconfigured",
+          component: "authentication",
+          pending: Number(pendingAuthenticationEmail.count),
+          missingWebhook: !env.NOTIFICATION_WEBHOOK,
+          missingWebhookSecret: !env.NOTIFICATION_WEBHOOK_SECRET,
+        }));
+      }
+      return;
+    }
+    const queued = (await env.DB.prepare(
+      "SELECT * FROM notifications WHERE status IN ('queued','failed') AND attempts<5 AND (next_attempt_at IS NULL OR next_attempt_at<=CURRENT_TIMESTAMP) ORDER BY created_at LIMIT 50",
+    ).all()).results;
     for (const notification of queued) {
       try {
         const template = await env.DB.prepare("SELECT template_key,subject,preheader,html_content,text_content FROM email_templates WHERE template_key=?1 AND enabled=1").bind(notification.event_type).first();
         const response = await fetch(env.NOTIFICATION_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.NOTIFICATION_WEBHOOK_SECRET || ""}` }, body: json({ ...JSON.parse(notification.payload_json), template }) });
-        await env.DB.prepare("UPDATE notifications SET status=?1,sent_at=CASE WHEN ?1='sent' THEN CURRENT_TIMESTAMP ELSE sent_at END WHERE id=?2").bind(response.ok ? "sent" : "failed", notification.id).run();
-      } catch {
-        await env.DB.prepare("UPDATE notifications SET status='failed' WHERE id=?1").bind(notification.id).run();
+        if (response.ok) {
+          await env.DB.prepare(`UPDATE notifications SET status='sent',sent_at=CURRENT_TIMESTAMP,attempts=attempts+1,
+            next_attempt_at=NULL,last_error=NULL,
+            payload_json=CASE WHEN event_type IN ('email_verification','password_reset') THEN '{"delivered":true}' ELSE payload_json END
+            WHERE id=?1`).bind(notification.id).run();
+        } else {
+          await env.DB.prepare(`UPDATE notifications SET status='failed',attempts=attempts+1,
+            next_attempt_at=datetime('now',CASE attempts WHEN 0 THEN '+5 minutes' WHEN 1 THEN '+15 minutes' WHEN 2 THEN '+30 minutes' ELSE '+60 minutes' END),
+            last_error=?1 WHERE id=?2`).bind(`HTTP ${response.status}`, notification.id).run();
+        }
+      } catch (error) {
+        await env.DB.prepare(`UPDATE notifications SET status='failed',attempts=attempts+1,
+          next_attempt_at=datetime('now',CASE attempts WHEN 0 THEN '+5 minutes' WHEN 1 THEN '+15 minutes' WHEN 2 THEN '+30 minutes' ELSE '+60 minutes' END),
+          last_error=?1 WHERE id=?2`).bind(String(error?.message || error).slice(0,300), notification.id).run();
       }
     }
   },

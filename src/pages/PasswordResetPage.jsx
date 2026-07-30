@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import useDocumentTitle from "../hooks/useDocumentTitle";
@@ -11,6 +11,9 @@ export default function PasswordResetPage() {
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
   useDocumentTitle(token ? "Reset Password" : "Forgot Password");
+  useEffect(() => {
+    if (token) window.history.replaceState(window.history.state, "", window.location.pathname);
+  }, [token]);
   const submit = async (event) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);

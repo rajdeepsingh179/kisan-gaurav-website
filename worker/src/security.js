@@ -47,7 +47,7 @@ export function securityHeaders() {
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Referrer-Policy": "strict-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
     "Cross-Origin-Opener-Policy": "same-origin",
     "X-Permitted-Cross-Domain-Policies": "none",

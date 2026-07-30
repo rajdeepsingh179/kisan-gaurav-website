@@ -20,7 +20,11 @@ async function postAuthAction(path, values) {
 
 function authErrorFrom(url, fallback) {
   try {
-    const error = new URL(url, window.location.origin).searchParams.get("error");
+    const params = new URL(url, window.location.origin).searchParams;
+    const error = params.get("error");
+    if (params.get("code") === "account_restricted") {
+      return "This account is restricted. Please contact Kisan Gaurav support.";
+    }
     if (error) return fallback;
   } catch {
     return "Authentication service returned an invalid response.";
