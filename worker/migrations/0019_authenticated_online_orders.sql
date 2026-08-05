@@ -1,6 +1,7 @@
 -- Enforce authenticated, verified customer ownership and online-only payment.
--- Invalid legacy rows are retained in a quarantine table for operational audit,
--- but are removed from the live order graph.
+-- Invalid legacy rows are copied to a quarantine table for operational audit.
+-- They remain in the live tables so applying this migration cannot erase order
+-- history; current application queries exclude them from active commerce views.
 
 UPDATE orders
 SET user_id=(
@@ -30,15 +31,6 @@ WHERE o.user_id IS NULL
    OR o.payment_status<>'paid'
    OR o.payment_order_id IS NULL
    OR o.payment_id IS NULL;
-
-DELETE FROM processed_payments WHERE order_id IN (SELECT id FROM legacy_invalid_orders);
-DELETE FROM returns WHERE order_id IN (SELECT id FROM legacy_invalid_orders);
-DELETE FROM coupon_redemptions WHERE order_id IN (SELECT id FROM legacy_invalid_orders);
-DELETE FROM notifications WHERE order_id IN (SELECT id FROM legacy_invalid_orders);
-DELETE FROM order_transitions WHERE order_id IN (SELECT id FROM legacy_invalid_orders);
-DELETE FROM order_status_history WHERE order_id IN (SELECT id FROM legacy_invalid_orders);
-DELETE FROM order_items WHERE order_id IN (SELECT id FROM legacy_invalid_orders);
-DELETE FROM orders WHERE id IN (SELECT id FROM legacy_invalid_orders);
 
 CREATE TRIGGER prevent_invalid_order_customer_insert
 BEFORE INSERT ON orders
