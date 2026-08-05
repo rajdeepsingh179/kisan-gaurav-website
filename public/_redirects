@@ -1,1 +1,23 @@
-/* /index.html 200
+# Only client-side application routes are rewritten.
+# Static files and unknown /assets/* paths must retain normal 404 behavior.
+/admin / 200
+/shop / 200
+/categories / 200
+/features / 200
+/kisan-digital / 200
+/about / 200
+/contact / 200
+/faq / 200
+/blog / 200
+/account / 200
+/cart / 200
+/checkout / 200
+/forgot-password / 200
+/reset-password / 200
+/verify-email / 200
+/admin/* / 200
+/shop/* / 200
+/category/* / 200
+/policies/* / 200
+/blog/* / 200
+/order-success/* / 200
