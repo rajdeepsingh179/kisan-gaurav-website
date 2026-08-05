@@ -74,12 +74,29 @@ async function seedCustomer(db, { verified = true } = {}) {
   ).run("customer-1", "customer@example.com", "Registered Customer", password.hash, password.salt, password.iterations, verified ? new Date().toISOString() : null);
 }
 
-async function seedAdmin(db) {
+async function seedAdmin(db, role = "ADMIN") {
   const password = await hashPassword(PASSWORD, crypto.randomUUID(), 100000);
   db.database.prepare(
     "INSERT INTO users(id,email,name,password_hash,password_salt,password_iterations,email_verified_at) VALUES(?,?,?,?,?,?,?)",
   ).run("admin-1", "admin@example.com", "Operations Admin", password.hash, password.salt, password.iterations, new Date().toISOString());
-  db.database.prepare("INSERT INTO user_permissions(user_id,role) VALUES(?,?)").run("admin-1", "ADMIN");
+  db.database.prepare("INSERT INTO user_permissions(user_id,role) VALUES(?,?)").run("admin-1", role);
+}
+
+function addCustomerDeletionSchema(db) {
+  db.exec(`
+    CREATE TABLE returns (id TEXT PRIMARY KEY,order_id TEXT,user_id TEXT REFERENCES users(id));
+    CREATE TABLE reviews (id TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id));
+    CREATE TABLE analytics_events (id TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id));
+    CREATE TABLE carts (id TEXT PRIMARY KEY,user_id TEXT UNIQUE REFERENCES users(id) ON DELETE CASCADE);
+    CREATE TABLE wishlist_items (user_id TEXT REFERENCES users(id) ON DELETE CASCADE,product_id TEXT,PRIMARY KEY(user_id,product_id));
+    CREATE TABLE inventory_history (id TEXT PRIMARY KEY,actor_user_id TEXT REFERENCES users(id));
+    CREATE TABLE order_transitions (id TEXT PRIMARY KEY,order_id TEXT REFERENCES orders(id),actor_user_id TEXT REFERENCES users(id));
+    CREATE TABLE cms_entries (id TEXT PRIMARY KEY,created_by TEXT REFERENCES users(id),updated_by TEXT REFERENCES users(id));
+    CREATE TABLE cms_versions (id TEXT PRIMARY KEY,created_by TEXT REFERENCES users(id));
+    CREATE TABLE email_templates (id TEXT PRIMARY KEY,updated_by TEXT REFERENCES users(id));
+    CREATE TABLE media_assets (id TEXT PRIMARY KEY,created_by TEXT REFERENCES users(id));
+    CREATE TABLE media_deletion_queue (asset_id TEXT PRIMARY KEY,object_key TEXT NOT NULL);
+  `);
 }
 
 function seedProduct(db) {
@@ -209,4 +226,23 @@ test("ADMIN can inspect and edit customers but cannot perform lifecycle actions"
   assert.equal(db.database.prepare("SELECT account_status FROM users WHERE id=?").get("customer-1").account_status, "ACTIVE");
   assert.equal(db.database.prepare("SELECT COUNT(*) count FROM activity_logs WHERE action='customer_profile_viewed'").get().count, 1);
   assert.equal(db.database.prepare("SELECT COUNT(*) count FROM activity_logs WHERE action='customer_updated'").get().count, 1);
+});
+
+test("SUPER_ADMIN can permanently delete a customer after explicit confirmation", async (t) => {
+  const db = createCommerceDatabase();
+  t.after(() => db.close());
+  addCustomerDeletionSchema(db);
+  await seedCustomer(db);
+  await seedAdmin(db, "SUPER_ADMIN");
+  const jar = await signIn(db, "admin@example.com");
+
+  const rejected = await request(db, "/api/admin/customers/customer-1", { confirmation: "delete" }, jar.header(), "DELETE");
+  assert.equal(rejected.response.status, 400);
+  assert.equal(db.database.prepare("SELECT COUNT(*) count FROM users WHERE id='customer-1'").get().count, 1);
+
+  const removed = await request(db, "/api/admin/customers/customer-1", { confirmation: "DELETE" }, jar.header(), "DELETE");
+  assert.equal(removed.response.status, 200);
+  assert.equal(db.database.prepare("SELECT COUNT(*) count FROM users WHERE id='customer-1'").get().count, 0);
+  const audit = db.database.prepare("SELECT actor_user_id,action FROM activity_logs WHERE action='customer_permanently_deleted'").get();
+  assert.equal(audit.actor_user_id, "admin-1");
 });

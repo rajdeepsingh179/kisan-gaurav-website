@@ -1,4 +1,4 @@
-import { MoreVertical, X } from "lucide-react";
+import { MoreVertical, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { apiFetch } from "../../services/api";
@@ -11,21 +11,43 @@ export default function CustomerActions({ customer, role, onReload, setError, se
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({});
+  const actionsRef = useRef(null);
+  const triggerRef = useRef(null);
   const menuRef = useRef(null);
   const isSuperAdmin = role === "SUPER_ADMIN";
 
   useEffect(() => {
     if (!open) return undefined;
     const close = (event) => {
-      if (event.key === "Escape" || !menuRef.current?.contains(event.target)) setOpen(false);
+      if (event.key === "Escape" || (!actionsRef.current?.contains(event.target) && !menuRef.current?.contains(event.target))) setOpen(false);
     };
+    const closeOnViewportChange = () => setOpen(false);
     document.addEventListener("keydown", close);
     document.addEventListener("pointerdown", close);
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnViewportChange, true);
     return () => {
       document.removeEventListener("keydown", close);
       document.removeEventListener("pointerdown", close);
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
     };
   }, [open]);
+
+  const toggleMenu = () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    const bounds = triggerRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const showAbove = window.innerHeight - bounds.bottom < 300 && bounds.top > 300;
+    setMenuPosition(showAbove
+      ? { bottom: Math.max(8, window.innerHeight - bounds.top + 4), right: Math.max(8, window.innerWidth - bounds.right) }
+      : { top: bounds.bottom + 4, right: Math.max(8, window.innerWidth - bounds.right) });
+    setOpen(true);
+  };
 
   const request = async (path, options, notice) => {
     setBusy(true);
@@ -63,29 +85,41 @@ export default function CustomerActions({ customer, role, onReload, setError, se
   const currentStatus = customer.status || customer.account_status || "ACTIVE";
   const isDeleted = customer.account_status === "DELETED";
   const isSuspended = customer.account_status === "SUSPENDED";
+  const openEdit = () => {
+    setOpen(false);
+    setDialog({
+      type: "edit",
+      form: {
+        name: customer.name || "",
+        firstName: customer.first_name || "",
+        lastName: customer.last_name || "",
+        mobile: customer.mobile || "",
+        notes: customer.customer_notes || "",
+        status: customer.account_status || "ACTIVE",
+      },
+    });
+  };
+  const openPermanentDelete = () => {
+    setOpen(false);
+    setDialog({ type: "permanent", confirmation: "" });
+  };
 
   return <>
-    <div className="customer-actions" ref={menuRef}>
-      <button type="button" className="customer-actions__trigger" aria-label={`Actions for ${customer.name || customer.email}`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)} disabled={busy}>
+    <div className="customer-actions" ref={actionsRef}>
+      <button type="button" className="customer-actions__button" onClick={openEdit} disabled={busy}>
+        <Pencil aria-hidden="true" /> Edit
+      </button>
+      {isSuperAdmin ? <button type="button" className="customer-actions__button is-danger" onClick={openPermanentDelete} disabled={busy}>
+        <Trash2 aria-hidden="true" /> Delete
+      </button> : null}
+      <button ref={triggerRef} type="button" className="customer-actions__trigger" aria-label={`More actions for ${customer.name || customer.email}`} aria-haspopup="menu" aria-expanded={open} onClick={toggleMenu} disabled={busy}>
         <MoreVertical aria-hidden="true" />
       </button>
-      {open ? <div className="customer-actions__menu" role="menu">
+    </div>
+    {open ? createPortal(<div className="customer-actions__menu" role="menu" ref={menuRef} style={menuPosition}>
         <button role="menuitem" type="button" onClick={() => loadDialog("profile", `/api/admin/customers/${customer.id}`)}>View Profile</button>
         <button role="menuitem" type="button" onClick={() => loadDialog("orders", `/api/admin/customers/${customer.id}/orders`)}>View Orders</button>
-        <button role="menuitem" type="button" onClick={() => {
-          setOpen(false);
-          setDialog({
-            type: "edit",
-            form: {
-              name: customer.name || "",
-              firstName: customer.first_name || "",
-              lastName: customer.last_name || "",
-              mobile: customer.mobile || "",
-              notes: customer.customer_notes || "",
-              status: customer.account_status || "ACTIVE",
-            },
-          });
-        }}>Edit Customer</button>
+        <button role="menuitem" type="button" onClick={openEdit}>Edit Customer</button>
         <button role="menuitem" type="button" onClick={() => {
           setOpen(false);
           setDialog({
@@ -115,13 +149,9 @@ export default function CustomerActions({ customer, role, onReload, setError, se
             : <button role="menuitem" type="button" className="is-danger" onClick={() => confirmStatus("blacklist", "Blacklist Customer", "Block sign-in, registration, orders, reviews, and coupons for this email?", "Customer blacklisted.")}>Blacklist</button>}
           <hr />
           {!isDeleted ? <button role="menuitem" type="button" className="is-danger" onClick={() => confirmStatus("delete", "Soft Delete", "Soft delete this account? Orders and business records will be preserved.", "Customer soft deleted.")}>Soft Delete</button> : null}
-          <button role="menuitem" type="button" className="is-danger" onClick={() => {
-            setOpen(false);
-            setDialog({ type: "permanent", confirmation: "" });
-          }}>Permanent Delete</button>
-        </> : null}
-      </div> : null}
-    </div>
+          <button role="menuitem" type="button" className="is-danger" onClick={openPermanentDelete}>Permanent Delete</button>
+        </> : <p className="customer-actions__permission">Only a Super Admin can suspend or delete customer accounts.</p>}
+      </div>, document.body) : null}
     {dialog ? createPortal(
       <CustomerDialog
         customer={customer}

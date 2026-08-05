@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/prepare-sites-build.mjs && node scripts/verify-dist-assets.mjs",
     "lint": "eslint . --max-warnings 0",
     "test": "npm --prefix worker test",
     "test:release": "npm run lint && npm test && npm run worker:check && npm run build",
